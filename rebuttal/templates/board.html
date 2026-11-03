@@ -6,7 +6,10 @@
     <h1>Disputes</h1>
     <p class="lede">Every open PayPal dispute, the time you have left, and what Rebuttal recommends.</p>
   </div>
-  <form method="post" action="/sync"><button class="btn ghost" type="submit">Check PayPal now</button></form>
+  <div class="row">
+    {% if mode == 'mock' %}<form method="post" action="/demo/reset" onsubmit="return confirm('Put the four demo disputes back as they started? Everyone viewing the demo shares them.')"><button class="btn ghost" type="submit">Reset demo</button></form>{% endif %}
+    <form method="post" action="/sync"><button class="btn ghost" type="submit">Check PayPal now</button></form>
+  </div>
 </section>
 
 <section class="stats">

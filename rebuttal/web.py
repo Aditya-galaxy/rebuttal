@@ -12,6 +12,7 @@ from fastapi import FastAPI, Form, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from starlette.concurrency import run_in_threadpool
 
 from .engine import Engine
 from .fake_paypal import FakePayPal
@@ -90,6 +91,18 @@ def board(request: Request):
                                  r["hours"] if r["hours"] is not None else 1e9))
     return templates.TemplateResponse(request, "board.html", _ctx(request, rows=rows, s=_summary(rows),
                                                          busy=any(r["status"] == INVESTIGATING for r in rows)))
+
+
+@app.post("/demo/reset")
+def reset_demo():
+    eng().reset_demo()
+    return RedirectResponse("/", 303)
+
+
+@app.on_event("shutdown")
+def _flush():
+    if engine and engine.snapshots:
+        engine.snapshots.stop()
 
 
 @app.post("/sync")
@@ -317,14 +330,24 @@ async def webhook(request: Request):
     event = json.loads(raw or b"{}")
     webhook_id = os.environ.get("PAYPAL_WEBHOOK_ID")
     if webhook_id and not isinstance(e.pp, FakePayPal):
-        if not e.pp.verify_webhook({k.lower(): v for k, v in request.headers.items()}, event, webhook_id):
+        headers = {k.lower(): v for k, v in request.headers.items()}
+        try:
+            verified = await run_in_threadpool(e.pp.verify_webhook, headers, event, webhook_id)
+        except PayPalError:
+            verified = False
+        if not verified:
             raise HTTPException(400, "signature check failed")
     elif not isinstance(e.pp, FakePayPal):
         raise HTTPException(503, "PAYPAL_WEBHOOK_ID not set")
     if event.get("event_type", "").startswith("CUSTOMER.DISPUTE."):
         did = (event.get("resource") or {}).get("dispute_id")
         if did:
-            e.refresh(e.pp.get_dispute(did))
+            try:
+                dispute = await run_in_threadpool(e.pp.get_dispute, did)
+            except PayPalError as err:   # e.g. a simulator event for a dispute that doesn't exist
+                log.warning("webhook for %s: %s", did, err)
+                return JSONResponse({"ok": True, "ignored": "unknown dispute"})
+            await run_in_threadpool(e.refresh, dispute)
     return JSONResponse({"ok": True})
 
 

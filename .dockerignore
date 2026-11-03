@@ -1,0 +1,10 @@
+.venv
+.env
+data
+.git
+.pytest_cache
+.ruff_cache
+__pycache__
+tests
+PLAN.md
+.DS_Store

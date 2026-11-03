@@ -6,6 +6,12 @@ refund, builds the evidence PayPal asks for, and sends it once the seller approv
 
 Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/) (Nov 2026).
 
+**Live demo:** https://rebuttal-761390104675.us-central1.run.app. Demo data plus the live AI agent,
+so no account is needed. Everyone shares one copy, and **Reset demo** puts it back.
+
+**Live on the PayPal sandbox:** https://rebuttal-sandbox-761390104675.us-central1.run.app. This one
+is connected to a real PayPal sandbox app and receives its dispute webhooks.
+
 ## The problem
 
 A small seller gets a PayPal dispute. They have a few days to respond, they don't know which
@@ -97,6 +103,10 @@ LLM_API_KEY=... uv run uvicorn rebuttal.web:app --port 8777
   PayPal's dispute record shows the statement and `proof-of-delivery.pdf` under
   `supporting_info`, `source: SUBMITTED_BY_SELLER`.
 
+- The hosted sandbox service receives `CUSTOMER.DISPUTE.*` webhooks and checks each one with PayPal's
+  `verify-webhook-signature`. PayPal's own simulated event passed the check. An unsigned POST
+  is refused with 400.
+
 That run is also why Rebuttal handles claims already under review. Real dispute objects can return
 `null` for `messages`, `allowed_response_options` and the due date, and the code is written for that.
 
@@ -146,13 +156,26 @@ rebuttal/
   gate.py           The checks before sending
   engine.py         Sync, investigate, approve, send
   web.py            FastAPI app: disputes board, case review, settings, storefront, webhook
+  persist.py        Keeps the SQLite files on a mounted folder across restarts
   cli.py            `rebuttal check`
-tests/test_core.py  22 tests: decisions, every gate rule, PayPal rules, the agent loop
+tests/test_core.py  24 tests: decisions, every gate rule, PayPal rules, the agent loop, webhooks
 ```
 
 ```bash
 uv run pytest
 ```
+
+## Running it as a container
+
+```bash
+docker build -t rebuttal .
+docker run --rm -p 8080:8080 rebuttal                    # demo mode
+docker run --rm -p 8080:8080 --env-file .env rebuttal    # your settings, e.g. the sandbox
+```
+
+Hosts without a lasting disk can set `SNAPSHOT_DIR` to a mounted folder (a storage bucket, for
+example). Rebuttal restores its two SQLite files from there on start and copies them back whenever
+they change.
 
 ## Honest limits
 

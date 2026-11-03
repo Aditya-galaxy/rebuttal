@@ -227,3 +227,37 @@ def test_claim_already_under_review_gets_supporting_info(world):
     sent = next(c for c in pp.calls if c[0] == "provide_supporting_info")[2]["notes"]
     assert "4589203716" in sent and len(sent) <= 2000
     assert "proof-of-delivery.pdf" in [n for n, _ in pp.uploads["PP-R-1"]]
+
+
+def test_snapshots_survive_a_restart(tmp_path):
+    from rebuttal.persist import Snapshotter, restore
+    data, snap, data2 = tmp_path / "data", tmp_path / "snap", tmp_path / "data2"
+    for d in (data, snap, data2):
+        d.mkdir()
+    shop = Shop(data / "shop.db")
+    seed_shop(shop)
+    s = Snapshotter(snap, {"shop.db": shop.db})
+    s.flush()
+    shop.add_order("EC-9999", "TXN9", "New Buyer", "n@example.com", "X", [], "1.00")
+    s.stop()                                   # what shutdown does
+    restore(snap, data2, ["shop.db"])
+    assert Shop(data2 / "shop.db").order("EC-9999")["buyer_name"] == "New Buyer"
+
+
+def test_webhook_refreshes_known_disputes_and_ignores_unknown(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from rebuttal import web
+    from rebuttal.engine import Engine
+    from rebuttal.state import State
+    shop, pp = Shop(), FakePayPal()
+    seed_shop(shop)
+    seed_pp(pp)
+    monkeypatch.setattr(web, "engine", Engine(pp, shop, State(), None, "mock"))
+    client = TestClient(web.app)
+    ok = client.post("/webhooks/paypal", json={"event_type": "CUSTOMER.DISPUTE.CREATED",
+                                               "resource": {"dispute_id": "PP-D-1001"}})
+    assert ok.status_code == 200 and web.engine.state.get("PP-D-1001")
+    unknown = client.post("/webhooks/paypal", json={"event_type": "CUSTOMER.DISPUTE.CREATED",
+                                                    "resource": {"dispute_id": "PP-D-0000"}})
+    assert unknown.status_code == 200 and unknown.json()["ignored"]

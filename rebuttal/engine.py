@@ -14,6 +14,7 @@ from .agent import LLM, investigate
 from .fake_paypal import FakePayPal
 from .fake_paypal import seed_demo as seed_fake
 from .paypal import LIVE, SANDBOX, PayPal, PayPalError
+from .persist import Snapshotter, restore
 from .playbook import assess
 from .shop import Shop
 from .shop import seed_demo as seed_shop
@@ -31,6 +32,7 @@ class Engine:
         self._busy: set[str] = set()
         self.live: dict[str, list] = {}   # tool steps of investigations still running
         self._lock = threading.Lock()
+        self.snapshots: Snapshotter | None = None
 
     @classmethod
     def from_env(cls) -> Engine:
@@ -45,12 +47,31 @@ class Engine:
             seed_shop(shop)
             seed_fake(pp)
         else:
+            snap = os.environ.get("SNAPSHOT_DIR")
+            if snap:
+                restore(Path(snap), data, ["shop.db", "state.db"])
             shop, state = Shop(data / "shop.db"), State(data / "state.db")
             if shop.is_empty():
                 seed_shop(shop)
             pp = PayPal(os.environ["PAYPAL_CLIENT_ID"], os.environ["PAYPAL_CLIENT_SECRET"],
                         LIVE if mode == "live" else SANDBOX)
-        return cls(pp, shop, state, LLM.from_env(), mode)
+        engine = cls(pp, shop, state, LLM.from_env(), mode)
+        if mode != "mock" and os.environ.get("SNAPSHOT_DIR"):
+            engine.snapshots = Snapshotter(Path(os.environ["SNAPSHOT_DIR"]),
+                                           {"shop.db": shop.db, "state.db": state.db})
+            engine.snapshots.start()
+        return engine
+
+    def reset_demo(self) -> None:
+        """Demo mode: put Ember & Clay's four disputes back as they were."""
+        if self.mode != "mock":
+            raise ValueError("Only the demo can be reset.")
+        shop, state, pp = Shop(), State(), FakePayPal()
+        seed_shop(shop)
+        seed_fake(pp)
+        self.shop, self.state, self.pp = shop, state, pp
+        self.live.clear()
+        self.sync()
 
     # --- sync and investigate -------------------------------------------------------------
 
