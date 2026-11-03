@@ -226,7 +226,8 @@ def storefront(request: Request):
     e = eng()
     return templates.TemplateResponse(request, "shop.html", _ctx(
         request, products=e.shop.products(), client_id=os.environ.get("PAYPAL_CLIENT_ID", ""),
-        is_fake=isinstance(e.pp, FakePayPal), done=request.query_params.get("done")))
+        is_fake=isinstance(e.pp, FakePayPal), done=request.query_params.get("done"),
+        orders=[] if isinstance(e.pp, FakePayPal) else e.shop.recent_orders()))
 
 
 @app.post("/shop/orders")
@@ -259,9 +260,9 @@ async def capture_order(request: Request, paypal_order_id: str):
     e.shop.add_order(order_id, cap["id"], name or "Sandbox buyer", payer.get("email_address", ""), ship_to,
                      [{"sku": product["sku"], "title": product["title"], "qty": 1, "price": product["price"]}],
                      cap["amount"]["value"], cap["amount"]["currency_code"], paypal_order_id=paypal_order_id)
-    _ship_demo(e, order_id, cap["id"], body.get("scenario", "delivered"), name or "Sandbox buyer",
-               addr.get("admin_area_2", ""), addr.get("admin_area_1", ""))
-    return {"order_id": order_id, "transaction_id": cap["id"]}
+    arrives = _ship_demo(e, order_id, cap["id"], body.get("scenario", "delivered"), name or "Sandbox buyer",
+                         addr.get("admin_area_2", ""), addr.get("admin_area_1", ""), realtime=True)
+    return {"order_id": order_id, "transaction_id": cap["id"], "arrives": arrives}
 
 
 @app.post("/shop/simulate")
@@ -290,35 +291,47 @@ def simulate_purchase(sku: str = Form(...), scenario: str = Form("delivered"), r
     return RedirectResponse(f"/case/{d['dispute_id']}", 303)
 
 
+# FedEx International Priority from Jaipur, hours after payment. Scaled by SHIP_HOURS_SCALE so a
+# test can run the journey in minutes; the demo uses real time.
+JOURNEY = [(20, "Jaipur, IN", "Picked up"),
+           (32, "New Delhi, IN", "Departed FedEx hub"),
+           (54, "Memphis, TN, US", "Arrived at FedEx hub"),
+           (60, "Memphis, TN, US", "International shipment release - Import"),
+           (86, "{where}, US", "On FedEx vehicle for delivery"),
+           (92, "{where}, US", "Delivered, signed for by {signed}")]
+
+
 def _ship_demo(e: Engine, order_id: str, transaction_id: str, scenario: str, buyer: str, city: str,
-               state: str) -> None:
+               state: str, realtime: bool = False) -> str | None:
     """Record a shipment for a demo order (a real studio would sync this from its carrier account).
 
-    Carrier events fall between the payment and now, so a sandbox order paid a minute ago shows a
-    delivery a few seconds ago rather than one dated before the payment.
+    The journey starts at payment (now, for a real sandbox order; the backdated order date in demo
+    mode), and the shop only reveals each scan once its time has passed, so a parcel arrives days
+    after payment as it would for real. Returns the planned delivery time.
     """
     now = datetime.now(UTC)
-    start = parse_time(e.shop.order(order_id)["created_at"])
-    at = lambda f: (start + (now - start) * f).isoformat(timespec="seconds")  # noqa: E731
+    first, _, last = buyer.partition(" ")
+    signed = f"{first[:1]}. {last or first}".upper()
+    where = ", ".join(filter(None, [city, state])) or "Destination"
+    start = now if realtime else parse_time(e.shop.order(order_id)["created_at"])
+    scale = float(os.environ.get("SHIP_HOURS_SCALE", "1")) if realtime else 1.0
+    at = lambda h: (start + timedelta(hours=h * scale)).isoformat(timespec="seconds")  # noqa: E731
+    journey = JOURNEY[:2] if scenario == "lost" else JOURNEY
+    events = [{"at": at(h), "where": w.format(where=where), "event": ev.format(signed=signed)}
+              for h, w, ev in journey]
     number = "77" + now.strftime("%d%H%M%S%f")[:10]
     if scenario == "lost":
-        events = [{"at": at(0.05), "where": "Jaipur, IN", "event": "Picked up"},
-                  {"at": at(0.1), "where": "Mumbai, IN", "event": "Departed origin country"}]
         e.shop.add_shipment(order_id, "FedEx", number, "FedEx International Economy", "IN_TRANSIT", None, events)
     else:
-        first, _, last = buyer.partition(" ")
-        signed = f"{first[:1]}. {last or first}".upper()
-        where = ", ".join(filter(None, [city, state])) or "Destination"
-        events = [{"at": at(0.1), "where": "Jaipur, IN", "event": "Picked up"},
-                  {"at": at(0.5), "where": "Memphis, TN, US", "event": "International shipment release"},
-                  {"at": at(0.9), "where": f"{where}, US", "event": f"Delivered, signed for by {signed}"}]
         e.shop.add_shipment(order_id, "FedEx", number, "FedEx International Priority", "DELIVERED", signed,
                             events)
     if not isinstance(e.pp, FakePayPal):
         try:
-            e.pp.add_tracker(transaction_id, number, "FEDEX", "DELIVERED" if scenario != "lost" else "SHIPPED")
+            e.pp.add_tracker(transaction_id, number, "FEDEX", "SHIPPED")
+            e.shop.set_tracker_status(order_id, "SHIPPED")
         except PayPalError as err:   # tracking upload helps the demo but mustn't break checkout
             log.warning("tracking upload for %s failed: %s", order_id, err)
+    return events[-1]["at"] if scenario != "lost" else None
 
 
 # --- PayPal webhooks ---------------------------------------------------------------------------

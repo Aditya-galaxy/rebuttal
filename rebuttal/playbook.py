@@ -119,6 +119,7 @@ def assess(dispute: dict, shop, settings: Settings | None = None, now: datetime 
     txn = (dispute.get("disputed_transactions") or [{}])[0].get("seller_transaction_id", "")
     order = shop.order_for_transaction(txn) if txn else None
     findings, cites, warnings = [], [], []
+    in_transit = False
 
     if not order:
         warnings.append(f"No order in the shop matches transaction {txn or '(none)'}.")
@@ -150,6 +151,13 @@ def assess(dispute: dict, shop, settings: Settings | None = None, now: datetime 
                     strength = "medium"
                     warnings.append(f"Over ${SIGNATURE_THRESHOLD_USD:.0f} without a signature: "
                                     "Seller Protection needs signature confirmation.")
+            elif ship.get("expected_delivery") and (
+                    not last or (now - parse_time(last["at"])).days < STALLED_DAYS):
+                in_transit = True
+                seen = f"last scan \"{last['event']}\" in {last['where']} {_day(last['at'])}" if last \
+                    else "label created, not yet picked up"
+                findings.append(f"{ship['carrier']} {ship['tracking_number']} is on its way ({seen}); "
+                                f"delivery expected {_day(ship['expected_delivery'])}.")
             else:
                 idle = (now - parse_time(last["at"])).days if last else 999
                 findings.append(f"{ship['carrier']} {ship['tracking_number']} last scanned {idle} days ago: "
@@ -186,11 +194,12 @@ def assess(dispute: dict, shop, settings: Settings | None = None, now: datetime 
             cites.append(f"message:{m['id']}")
     # Keep-it and send-it-back offers only make sense when the buyer agrees they have the item.
     has_item = reason == "MERCHANDISE_OR_SERVICE_NOT_AS_DESCRIBED" and bool(ship and ship["status"] == "DELIVERED")
-    return _finish(dispute, reason, strength, findings, cites, warnings, oid, amount, settings, has_item)
+    return _finish(dispute, reason, strength, findings, cites, warnings, oid, amount, settings, has_item,
+                   in_transit)
 
 
 def _finish(dispute, reason, strength, findings, cites, warnings, oid, amount, settings,
-            has_item=False) -> Assessment:
+            has_item=False, in_transit=False) -> Assessment:
     offer_types = ((dispute.get("allowed_response_options") or {}).get("make_offer", {}).get("offer_types") or [])
     can_accept = bool((dispute.get("allowed_response_options") or {}).get("accept_claim"))
     p = WIN_ODDS[strength]
@@ -211,6 +220,14 @@ def _finish(dispute, reason, strength, findings, cites, warnings, oid, amount, s
         options.append(Option("refund", "Refund in full now", amount,
                               f"Closes the case today for ${amount:.2f}. No fee."))
 
+    can_message = any(lk.get("rel") == "send_message" for lk in dispute.get("links", []))
+    if in_transit and can_message:
+        options.insert(0, Option("message", "Send the tracking and wait",
+                                 round(0.1 * (amount + settings.dispute_fee), 2),
+                                 "The parcel is on schedule. Most buyers close the case once they can see "
+                                 "it moving; if it doesn't arrive, you can still refund."))
+        return Assessment(reason, REASON_LABELS.get(reason, reason), strength, findings, cites,
+                          PLAYBOOK.get(reason, DEFAULT_PLAY), options, "message", oid, warnings)
     if _reviewing(dispute):
         fight = options[0]
         fight.action, fight.label = "supporting_info", "Send supporting information"

@@ -136,6 +136,11 @@ class PayPal:
             "transaction_id": transaction_id, "tracking_number": tracking_number,
             "status": status, "carrier": carrier}]})
 
+    def update_tracker(self, transaction_id: str, tracking_number: str, carrier: str, status: str) -> dict:
+        return self._req("PUT", f"/v1/shipping/trackers/{transaction_id}-{tracking_number}", json={
+            "transaction_id": transaction_id, "tracking_number": tracking_number,
+            "status": status, "carrier": carrier})
+
     # --- webhooks ---------------------------------------------------------------------------
 
     def verify_webhook(self, headers: dict, event: dict, webhook_id: str) -> bool:

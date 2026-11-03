@@ -261,3 +261,65 @@ def test_webhook_refreshes_known_disputes_and_ignores_unknown(monkeypatch):
     unknown = client.post("/webhooks/paypal", json={"event_type": "CUSTOMER.DISPUTE.CREATED",
                                                     "resource": {"dispute_id": "PP-D-0000"}})
     assert unknown.status_code == 200 and unknown.json()["ignored"]
+
+
+def test_carrier_scans_appear_only_once_they_happen():
+    from datetime import UTC, datetime, timedelta
+    shop = Shop()
+    t0 = datetime(2026, 11, 4, tzinfo=UTC)
+    shop.add_order("EC-1", "TX1", "Jo Lee", "j@example.com", "Austin, TX", [], "10.00", paypal_order_id="PO1")
+    shop.add_shipment("EC-1", "FedEx", "77", "Priority", "DELIVERED", "J. LEE", [
+        {"at": (t0 + timedelta(hours=20)).isoformat(), "where": "Jaipur, IN", "event": "Picked up"},
+        {"at": (t0 + timedelta(hours=92)).isoformat(), "where": "Austin, TX, US", "event": "Delivered"}])
+    early = shop.shipment("EC-1", now=t0 + timedelta(hours=1))
+    assert (early["status"], early["events"], early["signature"]) == ("LABEL_CREATED", [], None)
+    mid = shop.shipment("EC-1", now=t0 + timedelta(hours=30))
+    assert mid["status"] == "IN_TRANSIT" and len(mid["events"]) == 1 and mid["expected_delivery"]
+    done = shop.shipment("EC-1", now=t0 + timedelta(hours=93))
+    assert (done["status"], done["signature"], len(done["events"])) == ("DELIVERED", "J. LEE", 2)
+
+
+def test_not_received_before_delivery_is_not_a_strong_fight():
+    """A buyer who disputes while the parcel is still moving: no proof of delivery yet."""
+    shop, pp = Shop(), FakePayPal()
+    seed_shop(shop)
+    from datetime import UTC, datetime, timedelta
+    now = datetime.now(UTC)
+    shop.add_order("EC-5", "TX5", "Jo Lee", "j@example.com", "Austin, TX",
+                   [{"sku": "VASE-INDIGO", "title": "Vase", "qty": 1, "price": "148.00"}], "148.00")
+    shop.add_shipment("EC-5", "FedEx", "78", "Priority", "DELIVERED", "J. LEE", [
+        {"at": (now - timedelta(hours=10)).isoformat(), "where": "Jaipur, IN", "event": "Picked up"},
+        {"at": (now + timedelta(hours=60)).isoformat(), "where": "Austin, TX, US", "event": "Delivered"}])
+    pp.open_dispute(dispute_id="PP-D-5", transaction_id="TX5", buyer_name="Jo Lee", amount="148.00",
+                    reason="MERCHANDISE_OR_SERVICE_NOT_RECEIVED")
+    a = assess(pp.get_dispute("PP-D-5"), shop)
+    assert a.strength == "medium" and a.recommended != "fight"
+
+
+def test_in_transit_case_messages_then_fights_once_delivered():
+    from datetime import UTC, datetime, timedelta
+
+    from rebuttal.engine import Engine
+    from rebuttal.state import State
+    shop, pp = Shop(), FakePayPal()
+    seed_shop(shop)
+    now = datetime.now(UTC)
+    shop.add_order("EC-7", "TX7", "Jo Lee", "j@example.com", "Austin, TX",
+                   [{"sku": "VASE-INDIGO", "title": "Vase", "qty": 1, "price": "148.00"}], "148.00")
+    journey = [{"at": (now - timedelta(hours=10)).isoformat(), "where": "Jaipur, IN", "event": "Picked up"},
+               {"at": (now + timedelta(hours=60)).isoformat(), "where": "Austin, TX, US", "event": "Delivered"}]
+    shop.add_shipment("EC-7", "FedEx", "79", "Priority", "DELIVERED", "J. LEE", journey)
+    pp.open_dispute(dispute_id="PP-D-7", transaction_id="TX7", buyer_name="Jo Lee", amount="148.00",
+                    reason="MERCHANDISE_OR_SERVICE_NOT_RECEIVED", requested=["PROOF_OF_FULFILLMENT"])
+    e = Engine(pp, shop, State(), None, "mock")
+    e.sync(wait=True)
+    assert e.state.get("PP-D-7")["plan"]["action"] == "message"
+    e.send("PP-D-7")
+    assert "79" in pp.get_dispute("PP-D-7")["messages"][-1]["content"]
+    e.sync(wait=True)                                      # nothing changed: no new investigation
+    assert e.state.get("PP-D-7")["status"] == "sent"
+    journey[-1]["at"] = (now - timedelta(minutes=5)).isoformat()   # the parcel arrives
+    shop.add_shipment("EC-7", "FedEx", "79", "Priority", "DELIVERED", "J. LEE", journey)
+    e.sync(wait=True)
+    case = e.state.get("PP-D-7")
+    assert case["status"] == "ready" and case["plan"]["action"] == "fight"

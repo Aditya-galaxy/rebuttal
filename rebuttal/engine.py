@@ -56,11 +56,34 @@ class Engine:
             pp = PayPal(os.environ["PAYPAL_CLIENT_ID"], os.environ["PAYPAL_CLIENT_SECRET"],
                         LIVE if mode == "live" else SANDBOX)
         engine = cls(pp, shop, state, LLM.from_env(), mode)
+        if mode != "mock":
+            engine.start_carrier()
         if mode != "mock" and os.environ.get("SNAPSHOT_DIR"):
             engine.snapshots = Snapshotter(Path(os.environ["SNAPSHOT_DIR"]),
                                            {"shop.db": shop.db, "state.db": state.db})
             engine.snapshots.start()
         return engine
+
+    def carrier_tick(self) -> None:
+        """Tell PayPal when a parcel on a real order has been delivered (its tracker said Shipped)."""
+        for order, ship in self.shop.shipments_to_report():
+            try:
+                self.pp.update_tracker(order["transaction_id"], ship["tracking_number"],
+                                       ship["carrier"].upper().replace(" ", "_"), "DELIVERED")
+                self.shop.set_tracker_status(order["id"], "DELIVERED")
+                log.info("tracker for %s marked delivered", order["id"])
+            except PayPalError as e:
+                log.warning("tracker update for %s failed: %s", order["id"], e)
+
+    def start_carrier(self, every: float = 300) -> None:
+        def loop():
+            while True:
+                try:
+                    self.carrier_tick()
+                except Exception:
+                    log.exception("carrier tick")
+                threading.Event().wait(every)
+        threading.Thread(target=loop, daemon=True, name="carrier").start()
 
     def reset_demo(self) -> None:
         """Demo mode: put Ember & Clay's four disputes back as they were."""
@@ -92,11 +115,24 @@ class Engine:
         rels = {lk.get("rel") for lk in dispute.get("links", [])}
         waiting = dispute["status"] == "WAITING_FOR_SELLER_RESPONSE" or (
             "provide_supporting_info" in rels and "provide_evidence" not in rels and case["status"] != SENT)
+        plan = case["plan"] or {}
+        if case["status"] == SENT and plan.get("action") == "message":
+            # We sent the tracking and are waiting on the parcel: look again once it moves on.
+            if self._parcel_status(dispute) != plan.get("parcel_status"):
+                self.state.set_status(did, INVESTIGATING, "The parcel's status changed.")
+                self.investigate(did, wait=wait)
+            return
         # New, never planned, or PayPal came back for more after we answered.
         if waiting and (is_new or not case["plan"] or case["status"] in (SENT, FAILED)):
             if case["status"] == SENT:
                 self.state.set_status(did, INVESTIGATING, "PayPal asked for a new response.")
             self.investigate(did, wait=wait)
+
+    def _parcel_status(self, dispute: dict) -> str | None:
+        txn = ((dispute.get("disputed_transactions") or [{}])[0]).get("seller_transaction_id")
+        order = self.shop.order_for_transaction(txn) if txn else None
+        ship = self.shop.shipment(order["id"]) if order else None
+        return ship["status"] if ship else None
 
     def investigate(self, dispute_id: str, wait: bool = False):
         with self._lock:
@@ -115,6 +151,7 @@ class Engine:
             a = assess(dispute, self.shop, settings)
             self.live[dispute_id] = []
             plan = investigate(dispute, self.shop, a, self.llm, trace=self.live[dispute_id])
+            plan["parcel_status"] = self._parcel_status(dispute)
             verdict = gate.run(plan, dispute, self.shop, a, settings)
             self.state.set_plan(dispute_id, plan, verdict.checks, verdict.autopilot, READY)
             self.state.set_status(dispute_id, READY, f"Investigated: recommends {_label(plan['action'])}"

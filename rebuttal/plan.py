@@ -75,12 +75,28 @@ def rules_plan(dispute: dict, shop, a: Assessment, action: str | None = None) ->
                                  + (f"I'd like to refund ${offer:.2f} and you keep the item."
                                     if a.recommended == "partial_refund" else
                                     "Please send the item back and I'll refund you in full when it arrives."))
+    elif a.recommended == "message":
+        ship = shop.shipment(a.order_id) if a.order_id else None
+        eta = ship.get("expected_delivery") if ship else None
+        when = f" and {ship['carrier']} expects to deliver it on {_date(eta)}" if eta else ""
+        plan["summary"] = (f"The parcel is still on its way. {a.findings[-1] if a.findings else ''} "
+                           "Rebuttal will send the buyer the tracking so they can follow it.").strip()
+        plan["buyer_message"] = (
+            f"Hi {first}, I'm sorry for the wait. Your order is on its way{when}. "
+            + (f"You can follow it with {ship['carrier']} tracking number {ship['tracking_number']}. " if ship
+               else "")
+            + "If it hasn't arrived by then, reply here and I'll sort it out straight away.")
     elif a.recommended == "refund":
         plan["summary"] = (f"The records don't support fighting this one. {a.findings[-1] if a.findings else ''} "
                            f"Refunding ${amount:.2f} now avoids the dispute fee.").strip()
         plan["buyer_message"] = (f"Hi {first}, I'm sorry your order didn't reach you. "
                                  "I've refunded you in full through PayPal.")
     return plan
+
+
+def _date(iso: str) -> str:
+    from .playbook import parse_time
+    return parse_time(iso).strftime("%-d %B")
 
 
 def documents(plan: dict, shop, dispute_id: str, a: Assessment) -> dict[str, bytes]:

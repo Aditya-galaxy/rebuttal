@@ -4,7 +4,30 @@
 <section class="hero"><div><h1>Ember &amp; Clay storefront</h1>
   <p class="lede">The demo studio's shop. {% if is_fake %}Buy something, choose what happens to the parcel, and open a dispute as the buyer. Rebuttal picks it up straight away.{% else %}Pay with a PayPal sandbox buyer account. Then open a dispute from that buyer's sandbox account, and Rebuttal picks it up.{% endif %}</p></div></section>
 
-{% if done %}<div class="banner ok">Order {{ done }} paid and shipped. Open a dispute from the buyer's sandbox account to see Rebuttal respond.</div>{% endif %}
+{% if done %}<div class="banner ok">Order {{ done }} is paid. FedEx picks it up in about a day and delivers it in about four. You can follow it under Recent orders.</div>{% endif %}
+
+{% if orders %}
+<section class="card orders">
+  <h2>Recent orders</h2>
+  <table>
+    <thead><tr><th>Order</th><th>Buyer</th><th>Item</th><th>Parcel</th><th>Latest scan</th></tr></thead>
+    <tbody>
+    {% for o in orders %}{% set sh = o.shipment %}
+      <tr>
+        <td><strong>{{ o.id }}</strong><div class="muted small">{{ o.created_at|when }}</div></td>
+        <td>{{ o.buyer_name }}</td>
+        <td>{{ o['items'][0].title if o['items'] else '' }} <span class="muted">${{ o.total }}</span></td>
+        <td>{% if sh %}<span class="pstate ps-{{ sh.status|lower }}">{{ sh.status.replace('_', ' ')|capitalize }}</span>
+          <div class="muted small">{{ sh.carrier }} {{ sh.tracking_number }}</div>{% endif %}</td>
+        <td>{% if sh and sh.events %}{{ sh.events[-1].event }}<div class="muted small">{{ sh.events[-1].where }} · {{ sh.events[-1].at|when }}</div>{% endif %}
+          {% if sh and sh.expected_delivery %}<div class="small">Delivery expected {{ sh.expected_delivery|when }}</div>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  <p class="muted small">Carrier scans for sandbox orders are simulated on the real clock: each appears once its time has passed, and Rebuttal tells PayPal's tracker when the parcel is delivered.</p>
+</section>
+{% endif %}
 
 <div class="products">
   {% for p in products %}

@@ -20,7 +20,7 @@ create table if not exists orders (
     buyer_name text, buyer_email text, ship_to text, items text, total text, currency text);
 create table if not exists shipments (
     order_id text primary key, carrier text, tracking_number text, service text,
-    status text, signature text, events text);
+    status text, signature text, events text, tracker_status text);
 create table if not exists messages (
     id integer primary key autoincrement, order_id text, at text, sender text, channel text, body text);
 create table if not exists policies (kind text primary key, title text, body text, url text);
@@ -32,6 +32,10 @@ class Shop:
         self.db = sqlite3.connect(str(path), check_same_thread=False)
         self.db.row_factory = sqlite3.Row
         self.db.executescript(SCHEMA)
+        cols = {r["name"] for r in self.db.execute("pragma table_info(shipments)")}
+        if "tracker_status" not in cols:   # databases saved before carrier scheduling
+            self.db.execute("alter table shipments add column tracker_status text")
+            self.db.commit()
 
     # --- reads used by the agent's tools ------------------------------------------------------
 
@@ -43,13 +47,48 @@ class Shop:
         row = self.db.execute("select * from orders where id = ?", (order_id,)).fetchone()
         return _order(row) if row else None
 
-    def shipment(self, order_id: str) -> dict | None:
+    def shipment(self, order_id: str, now: datetime | None = None) -> dict | None:
+        """The shipment as the carrier reports it now.
+
+        Events are stored as the carrier's whole planned journey, so a parcel shipped today is
+        delivered days later, not the moment it's paid for. Only events that have happened are
+        returned, and the status and signature follow them.
+        """
         row = self.db.execute("select * from shipments where order_id = ?", (order_id,)).fetchone()
         if not row:
             return None
         d = dict(row)
-        d["events"] = json.loads(d["events"] or "[]")
+        planned = json.loads(d["events"] or "[]")
+        now = now or datetime.now(UTC)
+        d["events"] = [e for e in planned if _parse(e["at"]) <= now]
+        arrives = planned[-1]["at"] if planned and d["status"] == "DELIVERED" else None
+        if d["status"] == "DELIVERED" and len(d["events"]) < len(planned):
+            d["status"], d["signature"] = ("IN_TRANSIT" if d["events"] else "LABEL_CREATED"), None
+            d["expected_delivery"] = arrives
+        else:
+            d["expected_delivery"] = None
         return d
+
+    def recent_orders(self, limit: int = 8) -> list[dict]:
+        rows = self.db.execute("select id from orders where paypal_order_id is not null "
+                               "order by created_at desc limit ?", (limit,))
+        return [{**self.order(r["id"]), "shipment": self.shipment(r["id"])} for r in rows]
+
+    def shipments_to_report(self) -> list[tuple[dict, dict]]:
+        """Delivered parcels on real PayPal orders whose PayPal tracker still says otherwise."""
+        rows = self.db.execute("select s.order_id from shipments s join orders o on o.id = s.order_id "
+                               "where o.paypal_order_id is not null and coalesce(s.tracker_status, '') "
+                               "!= 'DELIVERED'")
+        out = []
+        for r in rows:
+            ship = self.shipment(r["order_id"])
+            if ship and ship["status"] == "DELIVERED":
+                out.append((self.order(r["order_id"]), ship))
+        return out
+
+    def set_tracker_status(self, order_id: str, status: str) -> None:
+        self.db.execute("update shipments set tracker_status = ? where order_id = ?", (status, order_id))
+        self.db.commit()
 
     def messages(self, order_id: str) -> list[dict]:
         rows = self.db.execute("select * from messages where order_id = ? order by at", (order_id,))
@@ -98,7 +137,8 @@ class Shop:
         self.db.commit()
 
     def add_shipment(self, order_id, carrier, tracking_number, service, status, signature, events):
-        self.db.execute("insert or replace into shipments values (?,?,?,?,?,?,?)",
+        self.db.execute("insert or replace into shipments (order_id, carrier, tracking_number, service, "
+                        "status, signature, events) values (?,?,?,?,?,?,?)",
                         (order_id, carrier, tracking_number, service, status, signature, json.dumps(events)))
         self.db.commit()
 
@@ -123,6 +163,11 @@ def _order(row: sqlite3.Row) -> dict:
     d = dict(row)
     d["items"] = json.loads(d["items"] or "[]")
     return d
+
+
+def _parse(s: str) -> datetime:
+    t = datetime.fromisoformat(s.replace("Z", "+00:00"))
+    return t if t.tzinfo else t.replace(tzinfo=UTC)
 
 
 def _now() -> str:
