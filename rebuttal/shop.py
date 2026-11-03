@@ -8,9 +8,10 @@ sells to buyers in the US through PayPal. The storefront adds real sandbox order
 from __future__ import annotations
 
 import json
-import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+
+from .db import SharedDB
 
 SCHEMA = """
 create table if not exists products (
@@ -29,8 +30,7 @@ create table if not exists policies (kind text primary key, title text, body tex
 
 class Shop:
     def __init__(self, path: str | Path = ":memory:"):
-        self.db = sqlite3.connect(str(path), check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
+        self.db = SharedDB(path)
         self.db.executescript(SCHEMA)
         cols = {r["name"] for r in self.db.execute("pragma table_info(shipments)")}
         if "tracker_status" not in cols:   # databases saved before carrier scheduling
@@ -159,7 +159,7 @@ class Shop:
         return self.db.execute("select count(*) from products").fetchone()[0] == 0
 
 
-def _order(row: sqlite3.Row) -> dict:
+def _order(row) -> dict:
     d = dict(row)
     d["items"] = json.loads(d["items"] or "[]")
     return d

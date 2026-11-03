@@ -9,6 +9,7 @@ from dataclasses import asdict
 from datetime import UTC, datetime
 from pathlib import Path
 
+from .db import SharedDB
 from .playbook import Settings
 
 SCHEMA = """
@@ -24,8 +25,7 @@ INVESTIGATING, READY, SENT, CLOSED, FAILED = "investigating", "ready", "sent", "
 
 class State:
     def __init__(self, path: str | Path = ":memory:"):
-        self.db = sqlite3.connect(str(path), check_same_thread=False)
-        self.db.row_factory = sqlite3.Row
+        self.db = SharedDB(path)
         self.db.executescript(SCHEMA)
         self.lock = threading.RLock()
 

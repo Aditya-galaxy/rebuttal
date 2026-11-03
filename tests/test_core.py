@@ -323,3 +323,18 @@ def test_in_transit_case_messages_then_fights_once_delivered():
     e.sync(wait=True)
     case = e.state.get("PP-D-7")
     assert case["status"] == "ready" and case["plan"]["action"] == "fight"
+
+
+def test_shop_reads_stay_correct_under_parallel_investigations():
+    """Four investigations share one connection; each must still see its own rows."""
+    from concurrent.futures import ThreadPoolExecutor
+    shop = Shop()
+    seed_shop(shop)
+    want = {oid: shop.shipment(oid)["tracking_number"] for oid in ("EC-2041", "EC-2055", "EC-2063", "EC-2070")}
+
+    def read(oid):
+        return all(shop.shipment(oid)["tracking_number"] == want[oid] and shop.order(oid)["id"] == oid
+                   and isinstance(shop.messages(oid), list) for _ in range(300))
+
+    with ThreadPoolExecutor(8) as pool:
+        assert all(pool.map(read, list(want) * 4))
