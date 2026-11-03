@@ -1,0 +1,194 @@
+{% extends "base.html" %}
+{% block title %}{{ r.buyer }} · {{ r.id }} · Rebuttal{% endblock %}
+{% block main %}
+<a class="back" href="/">← All disputes</a>
+
+<section class="casehead u-{{ r.urgency }}">
+  <div>
+    <div class="eyebrow"><span class="tag">{{ r.reason }}</span> {{ r.stage }} · {{ r.id }} · PayPal: {{ r.paypal_status }}</div>
+    <h1>{{ r.buyer }} <span class="muted">· {{ r.item }}</span></h1>
+    {% if order %}<div class="muted small">Order {{ order.id }} · paid {{ order.created_at|when }} · PayPal transaction {{ order.transaction_id }}</div>{% endif %}
+  </div>
+  <div class="bigclock">
+    <div class="amt">{{ r.amount|money }}</div>
+    {% if c.status in ('ready', 'investigating', 'failed') and r.due %}
+      <div class="t" data-due="{{ r.due }}">{{ r.hours|clock }}</div>
+      <div class="l">left · due {{ r.due|when }}</div>
+    {% elif c.status == 'closed' %}
+      <div class="t">{{ 'Won' if r.won else 'Closed' }}</div>
+    {% elif c.status in ('ready', 'investigating') %}
+      <div class="t">In review</div><div class="l">PayPal is deciding; you can still add information</div>
+    {% else %}
+      <div class="t">Sent</div><div class="l">waiting on {{ 'the buyer' if d.status == 'WAITING_FOR_BUYER_RESPONSE' else 'PayPal' }}</div>
+    {% endif %}
+  </div>
+</section>
+
+{% if error %}<div class="banner bad">{{ error }}</div>{% endif %}
+{% if c.status == 'investigating' %}
+<div class="banner info" data-poll="/case/{{ c.dispute_id }}">
+  <span class="spin"></span> Rebuttal is investigating: reading the dispute, your order, the carrier history and your emails.
+  <ol class="live-trace" data-trace="/case/{{ c.dispute_id }}/status"></ol>
+</div>
+{% endif %}
+
+<div class="grid">
+  <section class="col facts">
+    <div class="card">
+      <h2>What the buyer says</h2>
+      {% for m in buyer_msgs %}
+        <blockquote class="untrusted"><div class="who">Written by the buyer · {{ m.time_posted|when }}</div>{{ m.content }}</blockquote>
+      {% else %}
+        <p class="muted">No message. {% if d.reason == 'UNAUTHORISED' %}The card holder told their bank they didn't make this payment.{% endif %}</p>
+      {% endfor %}
+      {% if requested %}
+        <div class="asked"><strong>PayPal asked you for:</strong>
+          {% for t in requested %}<span class="tag tag-out">{{ t|evlabel }}</span>{% endfor %}</div>
+      {% endif %}
+    </div>
+
+    <div class="card">
+      <h2>What your records show</h2>
+      <div class="strength st-{{ a.strength }}">Evidence strength: <strong>{{ a.strength }}</strong></div>
+      <ul class="findings">
+        {% for f in a.findings %}<li>{{ f }}</li>{% endfor %}
+      </ul>
+      {% for w in a.warnings %}<div class="note warn">{{ w }}</div>{% endfor %}
+      <div class="cites">{% for ci in a.citations %}<code>{{ ci }}</code>{% endfor %}</div>
+    </div>
+
+    {% if shipment %}
+    <div class="card">
+      <h2>{{ shipment.carrier }} {{ shipment.tracking_number }}</h2>
+      <div class="muted small">{{ shipment.service }}{% if shipment.signature %} · signed for by {{ shipment.signature }}{% endif %}</div>
+      <ol class="timeline">
+        {% for ev in shipment.events|reverse %}
+          <li class="{{ 'last' if loop.first }}"><span class="when">{{ ev.at|when }}</span><span class="what">{{ ev.event }}</span><span class="where">{{ ev.where }}</span></li>
+        {% endfor %}
+      </ol>
+    </div>
+    {% endif %}
+
+    {% if messages %}
+    <div class="card">
+      <h2>Emails about this order</h2>
+      {% for m in messages %}
+        <div class="msg msg-{{ m.sender }}"><div class="who">{{ order.buyer_name if m.sender == 'buyer' else 'You' }} · {{ m.at|when }}</div>{{ m.body }}</div>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="col decide">
+    <div class="card">
+      <h2>Your options</h2>
+      <form method="post" action="/case/{{ c.dispute_id }}/action" class="options">
+        {% for o in a.options %}
+        <label class="opt {{ 'chosen' if plan.action == o.action }} {{ 'best' if a.recommended == o.action }}">
+          <input type="radio" name="action" value="{{ o.action }}" {{ 'checked' if plan.action == o.action }} {{ 'disabled' if c.status in ('sent','closed') }} onchange="this.form.submit()">
+          <span class="ol">{{ o.label }}{% if a.recommended == o.action %} <em>Recommended</em>{% endif %}</span>
+          <span class="oc">{{ o.expected_cost|money }}</span>
+          <span class="od">{{ o.detail }}</span>
+        </label>
+        {% endfor %}
+      </form>
+      <p class="muted small">Cost is what you can expect to lose on average, using your settings (dispute fee {{ settings.dispute_fee|money }}).</p>
+    </div>
+
+    {% if plan %}
+    <form class="card plan" method="post" action="/case/{{ c.dispute_id }}/edit">
+      <div class="planhead">
+        <h2>{{ actions[plan.action] }}</h2>
+        <span class="muted small">drafted by {{ 'templates' if plan.author == 'rules' else plan.author }}</span>
+      </div>
+      {% if plan.summary %}<p class="summary">{{ plan.summary }}</p>{% endif %}
+
+      {% if plan.action in ('fight', 'supporting_info') %}
+        <h3>{{ 'Evidence for PayPal' if plan.action == 'fight' else 'Supporting information for PayPal' }}</h3>
+        {% for ev in plan.evidence %}
+          <div class="ev">
+            <div class="evhead"><span class="tag">{{ ev.evidence_type|evlabel }}</span>
+              {% if ev.tracking %}<span class="muted small">tracking {{ ev.tracking.carrier_name }} {{ ev.tracking.tracking_number }}</span>{% endif %}
+              {% if ev.doc %}{% set fname = 'listing-and-policy.pdf' if ev.doc == 'policy' else {'delivery':'proof-of-delivery.pdf','receipt':'order-receipt.pdf','messages':'buyer-messages.pdf','listing':'listing-and-policy.pdf'}[ev.doc] %}
+                <a class="doc" href="/case/{{ c.dispute_id }}/doc/{{ fname }}" target="_blank">📄 {{ fname }}</a>{% endif %}
+            </div>
+            <textarea name="notes" rows="{{ 6 if loop.first else 2 }}" maxlength="2000" {{ 'readonly' if c.status in ('sent','closed') }}>{{ ev.notes }}</textarea>
+          </div>
+        {% endfor %}
+      {% endif %}
+
+      {% if plan.action in ('partial_refund', 'refund_with_return') %}
+        <label class="field">Offer amount (USD)
+          <input type="number" step="0.01" min="0.01" max="{{ r.amount }}" name="offer_amount" value="{{ '%.2f'|format(plan.offer_amount or 0) }}" {{ 'readonly' if c.status in ('sent','closed') }}>
+        </label>
+      {% endif %}
+
+      {% if plan.action == 'supporting_info' %}
+        <input type="hidden" name="buyer_message" value="">
+        <p class="muted small">PayPal doesn't pass messages to the buyer while it reviews a claim.</p>
+      {% else %}
+      <label class="field">Message to the buyer
+        <textarea name="buyer_message" rows="4" maxlength="2000" {{ 'readonly' if c.status in ('sent','closed') }}>{{ plan.buyer_message }}</textarea>
+      </label>
+      {% endif %}
+      {% if c.status not in ('sent','closed') %}<button class="btn ghost small" type="submit">Save edits</button>{% endif %}
+    </form>
+
+    <div class="card">
+      <h2>Checks before sending</h2>
+      <ul class="checks">
+        {% for ch in checks %}
+          <li class="{{ 'ok' if ch.ok else ('bad' if ch.blocking else 'warn') }}"><span class="ic">{{ '✓' if ch.ok else ('✕' if ch.blocking else '!') }}</span>
+            <div><strong>{{ ch.name }}</strong><div class="muted small">{{ ch.detail }}</div></div></li>
+        {% endfor %}
+      </ul>
+      {% if c.status == 'ready' %}
+        <form method="post" action="/case/{{ c.dispute_id }}/send" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Sending to PayPal…'">
+          <button class="btn primary wide" type="submit" {{ 'disabled' if not passed }}>
+            {% if plan.action == 'fight' %}Approve and send evidence to PayPal{% elif plan.action == 'supporting_info' %}Approve and send to PayPal's review{% elif plan.action == 'refund' %}Approve full refund of {{ r.amount|money }}{% elif plan.action in ('partial_refund','refund_with_return') %}Approve and send offer{% else %}Approve and send{% endif %}
+          </button>
+        </form>
+        <form method="post" action="/case/{{ c.dispute_id }}/reinvestigate" class="center"><button class="link" type="submit">Investigate again</button></form>
+      {% endif %}
+    </div>
+    {% endif %}
+
+    {% if c.log %}
+    <div class="card">
+      <h2>History</h2>
+      <ol class="log">{% for l in c.log|reverse %}<li><span class="when">{{ l.at|when }}</span> {{ l.text }}</li>{% endfor %}</ol>
+      {% if submitted %}<div class="muted small">PayPal has {{ submitted|length }} evidence item{{ '' if submitted|length == 1 else 's' }} from you on file.</div>{% endif %}
+    </div>
+    {% endif %}
+
+    {% if (can_adjudicate or (is_fake and d.status == 'WAITING_FOR_BUYER_RESPONSE')) and c.status != 'closed' %}
+    <div class="card sandbox">
+      <h2>Sandbox controls</h2>
+      <p class="muted small">Stand in for PayPal and the buyer to see the case through. {{ 'Uses PayPal’s sandbox-only adjudicate call.' if not is_fake else 'Demo data only.' }}</p>
+      <form method="post" action="/case/{{ c.dispute_id }}/simulate" class="row">
+        {% if can_adjudicate %}
+          <button class="btn ghost small" name="outcome" value="seller">PayPal rules for the seller</button>
+          <button class="btn ghost small" name="outcome" value="buyer">PayPal rules for the buyer</button>
+        {% endif %}
+        {% if is_fake and d.status == 'WAITING_FOR_BUYER_RESPONSE' %}
+          <button class="btn ghost small" name="outcome" value="buyer_accepts">Buyer accepts the offer</button>
+        {% endif %}
+      </form>
+    </div>
+    {% endif %}
+  </section>
+</div>
+
+{% if plan and plan.trace %}
+<details class="card trace">
+  <summary>How Rebuttal worked this out ({{ plan.trace|length }} steps)</summary>
+  <ol>
+    {% for t in plan.trace %}
+      <li><code>{{ t.tool }}</code>{% if t.args %} <span class="muted">{{ t.args }}</span>{% endif %}
+        {% if t.note %}<div class="muted small">{{ t.note }}</div>{% endif %}
+        {% if t.result %}<div class="res">{{ t.result }}</div>{% endif %}</li>
+    {% endfor %}
+  </ol>
+</details>
+{% endif %}
+{% endblock %}

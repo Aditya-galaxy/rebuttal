@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Settings · Rebuttal{% endblock %}
+{% block main %}
+<section class="hero"><div><h1>Settings</h1>
+  <p class="lede">The numbers Rebuttal uses to weigh fighting against refunding, and how much it may do without asking.</p></div></section>
+{% if saved %}<div class="banner ok">Saved. New investigations use these numbers.</div>{% endif %}
+<form class="card narrow settings" method="post" action="/settings">
+  <label class="field">Your PayPal dispute fee (USD)
+    <input type="number" step="0.01" min="0" name="dispute_fee" value="{{ st.dispute_fee }}">
+    <span class="muted small">Charged by PayPal on disputes you lose. Check your seller agreement.</span></label>
+  <label class="field">Return shipping a buyer would pay (USD)
+    <input type="number" step="0.01" min="0" name="return_shipping_cost" value="{{ st.return_shipping_cost }}">
+    <span class="muted small">When this is high next to the price, a partial refund beats asking for the item back.</span></label>
+  <label class="field">Partial refund offer (% of price)
+    <input type="number" step="1" min="5" max="90" name="partial_refund_pct" value="{{ st.partial_refund_pct }}"></label>
+  <label class="field">Autopilot limit (USD)
+    <input type="number" step="1" min="0" name="autopilot_limit" value="{{ st.autopilot_limit }}">
+    <span class="muted small">Disputes up to this amount are answered without your click, but only when every check passes
+      and the plan matches the cost comparison. 0 means always ask.</span></label>
+  <button class="btn primary" type="submit">Save</button>
+</form>
+{% endblock %}

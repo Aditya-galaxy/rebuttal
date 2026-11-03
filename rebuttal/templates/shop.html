@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block title %}Storefront · Rebuttal{% endblock %}
+{% block main %}
+<section class="hero"><div><h1>Ember &amp; Clay storefront</h1>
+  <p class="lede">The demo studio's shop. {% if is_fake %}Buy something, choose what happens to the parcel, and open a dispute as the buyer. Rebuttal picks it up straight away.{% else %}Pay with a PayPal sandbox buyer account. Then open a dispute from that buyer's sandbox account, and Rebuttal picks it up.{% endif %}</p></div></section>
+
+{% if done %}<div class="banner ok">Order {{ done }} paid and shipped. Open a dispute from the buyer's sandbox account to see Rebuttal respond.</div>{% endif %}
+
+<div class="products">
+  {% for p in products %}
+  <article class="product">
+    <div class="pimg pimg-{{ p.sku|lower }}" aria-hidden="true"></div>
+    <h3>{{ p.title }}</h3>
+    <p class="muted small">{{ p.description }}</p>
+    <div class="price">${{ p.price }}</div>
+    {% if is_fake %}
+    <form method="post" action="/shop/simulate" class="sim">
+      <input type="hidden" name="sku" value="{{ p.sku }}">
+      <label>What happens to the parcel
+        <select name="scenario"><option value="delivered">Delivered, signed for</option><option value="lost">Lost in transit</option></select></label>
+      <label>The buyer's complaint
+        <select name="reason"><option value="inr">"It never arrived"</option><option value="snad">"Not as described"</option><option value="unauth">"I didn't pay for this"</option></select></label>
+      <button class="btn primary small" type="submit">Buy, ship, and dispute</button>
+    </form>
+    {% else %}
+    <div class="ppbtn" data-sku="{{ p.sku }}"></div>
+    {% endif %}
+  </article>
+  {% endfor %}
+</div>
+
+{% if not is_fake and client_id %}
+<script src="https://www.paypal.com/sdk/js?client-id={{ client_id }}&currency=USD&intent=capture"></script>
+<script>
+document.querySelectorAll('.ppbtn').forEach(el => {
+  paypal.Buttons({
+    style: {layout: 'horizontal', height: 38, tagline: false},
+    createOrder: () => fetch('/shop/orders', {method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({sku: el.dataset.sku})}).then(r => r.json()).then(o => o.id),
+    onApprove: (data) => fetch(`/shop/orders/${data.orderID}/capture`, {method: 'POST',
+      headers: {'Content-Type': 'application/json'}, body: JSON.stringify({sku: el.dataset.sku})})
+      .then(r => r.json()).then(o => { location.href = '/shop?done=' + o.order_id; }),
+  }).render(el);
+});
+</script>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,83 @@
+{% extends "base.html" %}
+{% block title %}Disputes · Rebuttal{% endblock %}
+{% block main %}
+<section class="hero">
+  <div>
+    <h1>Disputes</h1>
+    <p class="lede">Every open PayPal dispute, the time you have left, and what Rebuttal recommends.</p>
+  </div>
+  <form method="post" action="/sync"><button class="btn ghost" type="submit">Check PayPal now</button></form>
+</section>
+
+<section class="stats">
+  <div class="stat">
+    <div class="k">Money in dispute</div>
+    <div class="v">{{ s.at_risk|money }}</div>
+    <div class="sub">{{ s.open }} open case{{ '' if s.open == 1 else 's' }}</div>
+  </div>
+  <div class="stat {{ 'warn' if s.next_due and s.next_due.urgency in ('critical','overdue') }}">
+    <div class="k">Next deadline</div>
+    {% if s.next_due %}
+      <div class="v" data-due="{{ s.next_due.due }}">{{ s.next_due.hours|clock }}</div>
+      <div class="sub">{{ s.next_due.buyer }} · {{ s.next_due.reason }}</div>
+    {% else %}<div class="v">-</div><div class="sub">Nothing waiting</div>{% endif %}
+  </div>
+  <div class="stat">
+    <div class="k">Waiting on you</div>
+    <div class="v">{{ s.waiting_on_you }}</div>
+    <div class="sub">plans ready to review</div>
+  </div>
+  <div class="stat">
+    <div class="k">Won back</div>
+    <div class="v">{{ s.won|money }}</div>
+    <div class="sub">{{ s.closed }} closed</div>
+  </div>
+</section>
+
+{% if busy %}<p class="busy" data-poll="/"><span class="spin"></span> Rebuttal is investigating new disputes. This page updates itself.</p>{% endif %}
+
+{% if not rows %}
+<div class="empty">
+  <h2>No disputes right now</h2>
+  <p>When a buyer opens one, PayPal tells Rebuttal and the investigation starts straight away.</p>
+</div>
+{% else %}
+<ol class="cases">
+  {% for r in rows %}
+  <li>
+    <a class="case u-{{ r.urgency }}" href="/case/{{ r.id }}">
+      <div class="clock">
+        {% if r.status in ('ready', 'investigating', 'failed') and r.due %}
+          <div class="t" data-due="{{ r.due }}">{{ r.hours|clock }}</div>
+          <div class="l">to respond</div>
+        {% elif r.status in ('ready', 'investigating', 'failed') %}
+          <div class="t">In review</div><div class="l">add info any time</div>
+        {% elif r.status == 'closed' %}
+          <div class="t">{{ 'Won' if r.won else 'Closed' }}</div>
+          <div class="l">{{ 'kept ' ~ (r.amount|money) if r.won else 'refunded' }}</div>
+        {% else %}
+          <div class="t">Sent</div><div class="l">{{ r.paypal_status|lower }}</div>
+        {% endif %}
+      </div>
+      <div class="main">
+        <div class="line1"><strong>{{ r.buyer }}</strong> <span class="muted">· {{ r.item }}</span></div>
+        <div class="line2">
+          <span class="tag">{{ r.reason }}</span>
+          <span class="muted">{{ r.stage }} · {{ r.id }}</span>
+        </div>
+      </div>
+      <div class="amt">{{ r.amount|money }}</div>
+      <div class="rec">
+        {% if r.status == 'investigating' %}
+          <span class="chip chip-busy"><span class="spin"></span> Investigating</span>
+        {% elif r.action %}
+          <span class="chip chip-{{ r.action }}">{{ r.action_label }}</span>
+        {% endif %}
+        {% if r.status != 'investigating' %}<span class="state s-{{ r.status }}">{{ r.status_label }}</span>{% endif %}
+      </div>
+    </a>
+  </li>
+  {% endfor %}
+</ol>
+{% endif %}
+{% endblock %}

@@ -1,0 +1,169 @@
+# Rebuttal
+
+**The dispute deadline agent for small PayPal sellers.** Rebuttal watches every PayPal dispute's
+clock, investigates it against the seller's own records, works out whether to fight, offer or
+refund, builds the evidence PayPal asks for, and sends it once the seller approves.
+
+Built for the [PayPal AI Hackathon](https://paypalaihackathon.devpost.com/) (Nov 2026).
+
+## The problem
+
+A small seller gets a PayPal dispute. They have a few days to respond, they don't know which
+evidence PayPal wants for that reason code, and the evidence is spread across their order
+system, the carrier's site and old emails. So they miss the deadline, send a weak reply, or
+fight a case they were always going to lose and pay the dispute fee on top.
+
+The demo seller is **Ember & Clay**, a small ceramics studio in Jaipur that sells to buyers in
+the US. Cross-border sellers like this lose the most: long shipping times invite "not received"
+claims, and posting an item back to India costs more than many items are worth.
+
+## What it does
+
+1. **Watches.** It pulls disputes from the PayPal Disputes API (and PayPal dispute webhooks), and
+   gives every open case a live countdown to `seller_response_due_date`.
+2. **Investigates.** A tool-using AI agent reads the dispute, the order, the carrier's event
+   history, the emails with the buyer, the listing and the shop's policies.
+3. **Decides with numbers, not vibes.** Code, not the model, rates the evidence (strong, medium or
+   weak) and compares the expected cost of each option: fight, partial refund (buyer keeps the item),
+   refund after return, or refund in full. Rebuttal says "refund this one" when the records say
+   the seller would lose.
+4. **Drafts.** Notes for PayPal in plain language, a short message to the buyer, and evidence PDFs
+   built only from the seller's records. Every PDF footer lists the records it came from.
+5. **Checks before anything is sent.** These checks are deterministic, run against PayPal's latest
+   copy of the dispute, and are shown to the seller:
+   - the deadline is still open, and PayPal currently allows the action (its HATEOAS link is present
+     and the offer type is in `allowed_response_options`);
+   - every evidence type PayPal requested is included;
+   - every tracking number matches the recorded shipment;
+   - every fact cites a record that exists (`order:EC-2041`, `shipment:EC-2041`, `message:3` …);
+   - notes fit PayPal's 2,000 characters, the offer amount is within the disputed amount, and the
+     case is winnable.
+6. **Acts on approval.** One click sends it: `provide-evidence` (multipart, with PDFs), `make-offer`,
+   `accept-claim`, `send-message`, or `provide-supporting-info` when PayPal is already reviewing a
+   claim. An optional **autopilot** answers small disputes without a click, but only when every check
+   passes and the plan matches the cost comparison.
+
+## Try it in two minutes (no PayPal account needed)
+
+You need Python 3.12+ and [uv](https://docs.astral.sh/uv/).
+
+```bash
+git clone https://github.com/Aditya-galaxy/rebuttal && cd rebuttal
+uv run uvicorn rebuttal.web:app --port 8777
+```
+
+Open http://localhost:8777. This is **demo mode**: an in-memory PayPal with the same API shapes and
+rules as the real one, plus four Ember & Clay disputes that each get a different answer:
+
+| Dispute | What the records show | Rebuttal recommends |
+|---|---|---|
+| Vase "not received", $148 | DHL delivered it, signed for by the buyer | Fight with evidence |
+| Cups "not as described", $62 | The listing discloses that hand-fired glaze colour varies | Offer 30% back, buyer keeps them |
+| Coasters "not received", $35 | India Post tracking stopped 25 days ago | Refund in full: fighting would lose |
+| "Unauthorised payment", $210 | Signed delivery, and the buyer emailed asking for gift wrap | Fight with evidence |
+
+Open a case, read the investigation and the checks, click **Approve**, then use the sandbox controls
+to have PayPal rule on it. In **Storefront**, you can buy something, choose what happens to the
+parcel, and open a dispute as the buyer.
+
+Without a model key, plans are written from templates. To see the agent, set any OpenAI-compatible
+key first (we used Nebius Token Factory):
+
+```bash
+LLM_API_KEY=... uv run uvicorn rebuttal.web:app --port 8777
+```
+
+## Run it against the PayPal sandbox
+
+1. In the [PayPal Developer Dashboard](https://developer.paypal.com/dashboard/) (Sandbox), create
+   **US** business and personal sandbox accounts. A merchant app on the US business account gives
+   you a client id and secret. (Sandbox checkout fails if buyer and seller are both Indian accounts.)
+2. `cp .env.example .env`, set `PAYPAL_MODE=sandbox` and the two credentials, then check:
+   ```bash
+   uv run rebuttal check
+   ```
+3. Start the app and open **Storefront**. Pay with the sandbox *personal* account using the PayPal
+   button. Rebuttal records the order and uploads a FedEx tracker to PayPal.
+4. Log in to https://www.sandbox.paypal.com as that buyer and report a problem with the payment.
+5. Click **Check PayPal now**. Sandbox disputes take about 3 minutes to reach the API.
+
+### What we verified live in the sandbox (3 Nov 2026)
+
+- Order `EC-2071` was paid through PayPal Checkout (Orders v2 capture, transaction `1FK2168823766710E`),
+  and its tracker was uploaded as `DELIVERED`.
+- The buyer filed "I didn't receive an item". The sandbox opened dispute **PP-R-TLZ-10196141**
+  straight into PayPal review, where the only seller action is `provide_supporting_info`.
+- Rebuttal picked it up, the agent drafted a cited statement, and all checks passed. After approval,
+  PayPal's dispute record shows the statement and `proof-of-delivery.pdf` under
+  `supporting_info`, `source: SUBMITTED_BY_SELLER`.
+
+That run is also why Rebuttal handles claims already under review. Real dispute objects can return
+`null` for `messages`, `allowed_response_options` and the due date, and the code is written for that.
+
+## How the AI is used
+
+| Part | Done by |
+|---|---|
+| Reading the dispute and the records, choosing what matters | Agent (tool calls) |
+| Writing the statement to PayPal and the buyer message | Agent |
+| Evidence strength, cost of each option, recommended action | Code (`playbook.py`) |
+| Whether anything may be sent | Code (`gate.py`) |
+| Sending | The seller's click, or autopilot under the seller's limit |
+
+- **Model.** Any OpenAI-compatible chat API with tool calls (`LLM_BASE_URL`, `LLM_API_KEY`,
+  `LLM_MODEL`). Default: `deepseek-ai/DeepSeek-V4-Pro` on Nebius Token Factory, about 25 s per case.
+- **Tools.** `get_dispute`, `get_assessment`, `find_order`, `get_shipment`, `get_messages`,
+  `get_product`, `get_policy`, `submit_plan`. The case page shows each step live while it runs, and
+  the full trace afterwards.
+- **Guardrails.** Buyer-written text reaches the model labelled as untrusted data. The model can't
+  invent facts that get past the gate. If the model fails, Rebuttal falls back to a template plan and
+  says so on screen.
+
+## PayPal developer platform used
+
+| API | Used for |
+|---|---|
+| Disputes v1: list, show | Watching disputes, deadlines, requested evidence, allowed actions |
+| Disputes v1: `provide-evidence` (multipart + PDFs) | Fighting a dispute |
+| Disputes v1: `provide-supporting-info` | Adding to a claim PayPal is already reviewing |
+| Disputes v1: `make-offer`, `accept-claim`, `send-message` | Offers, refunds, buyer messages |
+| Disputes v1: `require-evidence`, `adjudicate` (sandbox only) | Demo controls |
+| Orders v2 + JavaScript SDK buttons | The demo storefront's checkout |
+| Shipment tracking (`/v1/shipping/trackers-batch`) | Uploading the carrier tracker |
+| Webhooks: `verify-webhook-signature`, `CUSTOMER.DISPUTE.*` | New disputes without polling |
+
+## Code map
+
+```
+rebuttal/
+  paypal.py         PayPal REST client (OAuth, disputes, orders, tracking, webhooks)
+  fake_paypal.py    In-memory PayPal with the same methods and rules, for demo mode and tests
+  shop.py           The seller's records (SQLite) and the Ember & Clay demo data
+  playbook.py       Evidence per reason code, evidence strength, cost of each option
+  agent.py          The tool-using agent and its fallback
+  plan.py           Plans, evidence PDFs, and turning an approved plan into PayPal calls
+  evidence_docs.py  PDF documents built from records
+  gate.py           The checks before sending
+  engine.py         Sync, investigate, approve, send
+  web.py            FastAPI app: disputes board, case review, settings, storefront, webhook
+  cli.py            `rebuttal check`
+tests/test_core.py  22 tests: decisions, every gate rule, PayPal rules, the agent loop
+```
+
+```bash
+uv run pytest
+```
+
+## Honest limits
+
+- **Simulated records.** The shop's records and carrier events are demo data. A real seller would
+  connect their store (Shopify, WooCommerce) and carrier accounts. The PayPal side is real in sandbox
+  mode.
+- **Estimated costs.** Win odds per strength level are fixed estimates, and the dispute fee and
+  return shipping cost come from Settings.
+- **Sandbox outcomes.** The sandbox only lets `adjudicate` run in certain states. A claim that opens
+  directly into review stays "in review".
+
+## License
+
+[Apache-2.0](LICENSE)
