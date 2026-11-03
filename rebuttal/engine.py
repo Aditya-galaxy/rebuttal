@@ -33,6 +33,7 @@ class Engine:
         self.live: dict[str, list] = {}   # tool steps of investigations still running
         self._lock = threading.Lock()
         self.snapshots: Snapshotter | None = None
+        self.generation = 0   # bumped by a demo reset; older investigations drop their results
 
     @classmethod
     def from_env(cls) -> Engine:
@@ -92,8 +93,10 @@ class Engine:
         shop, state, pp = Shop(), State(), FakePayPal()
         seed_shop(shop)
         seed_fake(pp)
-        self.shop, self.state, self.pp = shop, state, pp
-        self.live.clear()
+        with self._lock:
+            self.generation += 1
+            self.shop, self.state, self.pp = shop, state, pp
+            self.live, self._busy = {}, set()
         self.sync()
 
     # --- sync and investigate -------------------------------------------------------------
@@ -139,32 +142,37 @@ class Engine:
             if dispute_id in self._busy:
                 return
             self._busy.add(dispute_id)
-        fut = self.pool.submit(self._investigate, dispute_id)
+        fut = self.pool.submit(self._investigate, dispute_id, self.generation)
         if wait:
             fut.result()
 
-    def _investigate(self, dispute_id: str):
+    def _investigate(self, dispute_id: str, generation: int = 0):
+        state, shop, live = self.state, self.shop, self.live
         try:
-            case = self.state.get(dispute_id)
+            case = state.get(dispute_id)
             dispute = case["dispute"]
-            settings = self.state.settings()
-            a = assess(dispute, self.shop, settings)
-            self.live[dispute_id] = []
-            plan = investigate(dispute, self.shop, a, self.llm, trace=self.live[dispute_id])
+            settings = state.settings()
+            a = assess(dispute, shop, settings)
+            live[dispute_id] = []
+            plan = investigate(dispute, shop, a, self.llm, trace=live[dispute_id])
             plan["parcel_status"] = self._parcel_status(dispute)
-            verdict = gate.run(plan, dispute, self.shop, a, settings)
-            self.state.set_plan(dispute_id, plan, verdict.checks, verdict.autopilot, READY)
-            self.state.set_status(dispute_id, READY, f"Investigated: recommends {_label(plan['action'])}"
+            verdict = gate.run(plan, dispute, shop, a, settings)
+            if generation != self.generation:
+                return   # the demo was reset while this ran; its case no longer exists
+            state.set_plan(dispute_id, plan, verdict.checks, verdict.autopilot, READY)
+            state.set_status(dispute_id, READY, f"Investigated: recommends {_label(plan['action'])}"
                                   f" ({plan['author']}).")
             if verdict.autopilot and verdict.passed:
                 self.send(dispute_id, approved_by="autopilot")
         except Exception as e:
             log.exception("investigate %s", dispute_id)
-            self.state.set_status(dispute_id, FAILED, f"Investigation failed: {e}")
+            if generation == self.generation:
+                state.set_status(dispute_id, FAILED, f"Investigation failed: {e}")
         finally:
             with self._lock:
-                self._busy.discard(dispute_id)
-                self.live.pop(dispute_id, None)
+                if generation == self.generation:
+                    self._busy.discard(dispute_id)
+                live.pop(dispute_id, None)
 
     # --- seller actions -------------------------------------------------------------------
 

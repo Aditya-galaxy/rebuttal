@@ -338,3 +338,28 @@ def test_shop_reads_stay_correct_under_parallel_investigations():
 
     with ThreadPoolExecutor(8) as pool:
         assert all(pool.map(read, list(want) * 4))
+
+
+def test_demo_reset_while_investigating_leaves_every_case_planned():
+    import time
+
+    from rebuttal.engine import Engine
+    from rebuttal.state import State
+
+    class Slow:
+        model = "slow"
+
+        def chat(self, *_):
+            time.sleep(0.3)
+            raise RuntimeError("slow model gives up")   # falls back to the rules plan
+
+    shop, pp = Shop(), FakePayPal()
+    seed_shop(shop)
+    seed_pp(pp)
+    e = Engine(pp, shop, State(), Slow(), "mock")
+    e.sync()                      # four investigations start
+    e.reset_demo()                # reset before they finish
+    e.pool.shutdown(wait=True)
+    cases = {c["dispute_id"]: c for c in e.state.all()}
+    assert set(cases) == {"PP-D-1001", "PP-D-1002", "PP-D-1003", "PP-D-1004"}
+    assert all(c["status"] == "ready" and c["plan"] for c in cases.values())
