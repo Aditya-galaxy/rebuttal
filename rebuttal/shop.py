@@ -209,11 +209,10 @@ def _ago(days: float, base: datetime) -> str:
 SITE = "https://emberandclay.example"
 
 
-def seed_demo(shop: Shop, now: datetime | None = None) -> None:
-    """Ember & Clay: four orders that each became a different kind of dispute."""
+def seed_catalog(shop: Shop, now: datetime | None = None) -> None:
+    """Ember & Clay's products, listing photos and policies. Safe to run on every start, so a saved
+    database picks up catalogue changes (it once kept placeholder photo names)."""
     now = now or datetime.now(UTC)
-    a = lambda d: _ago(d, now)  # noqa: E731
-
     shop.add_product("VASE-INDIGO", "Indigo Moon Vase",
                      "Wheel-thrown stoneware vase, 32 cm, indigo crackle glaze. Ships in a double box.",
                      "148.00", f"{SITE}/p/indigo-moon-vase", ["vase-indigo.jpg"])
@@ -232,7 +231,8 @@ def seed_demo(shop: Shop, now: datetime | None = None) -> None:
                                ("CHAI-RUST", "chai-rust.jpg", "Chai Cups (Rust glaze), listing photo"),
                                ("COASTER-BLOCK", "coaster-block.jpg", "Block-print coasters, listing photo"),
                                ("PLANTER-PAIR", "planter-pair.jpg", "Terracotta planter pair, listing photo")):
-        shop.add_photo("listing", file, caption, sku=sku, at=a(60))
+        if not any(p["file"] == file for p in shop.photos(sku=sku, source="listing")):
+            shop.add_photo("listing", file, caption, sku=sku, at=_ago(60, now))
 
     shop.set_policy("returns", "Returns and refunds",
                     "Returns accepted within 30 days of delivery for items in original condition. "
@@ -243,6 +243,13 @@ def seed_demo(shop: Shop, now: datetime | None = None) -> None:
                     "Orders ship from Jaipur within 3 working days. Orders over $100 ship by DHL Express "
                     "or FedEx International Priority with signature on delivery. Smaller orders ship by "
                     "India Post registered airmail (10-20 working days).", f"{SITE}/policies/shipping")
+
+
+def seed_demo(shop: Shop, now: datetime | None = None) -> None:
+    """Ember & Clay: four orders that each became a different kind of dispute."""
+    now = now or datetime.now(UTC)
+    a = lambda d: _ago(d, now)  # noqa: E731
+    seed_catalog(shop, now)
 
     # 1. Not received, but DHL has a signed delivery: fight with proof of fulfilment.
     shop.add_order("EC-2041", "7KD04291VX3301845", "Jordan Miller", "jordan.miller@example.com",

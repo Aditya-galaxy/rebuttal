@@ -16,7 +16,7 @@ from .fake_paypal import seed_demo as seed_fake
 from .paypal import LIVE, SANDBOX, PayPal, PayPalError
 from .persist import Snapshotter, restore
 from .playbook import assess
-from .shop import Shop
+from .shop import Shop, seed_catalog
 from .shop import seed_demo as seed_shop
 from .state import CLOSED, FAILED, INVESTIGATING, READY, SENT, State
 
@@ -54,6 +54,8 @@ class Engine:
             shop, state = Shop(data / "shop.db"), State(data / "state.db")
             if shop.is_empty():
                 seed_shop(shop)
+            else:
+                seed_catalog(shop)
             pp = PayPal(os.environ["PAYPAL_CLIENT_ID"], os.environ["PAYPAL_CLIENT_SECRET"],
                         LIVE if mode == "live" else SANDBOX)
         engine = cls(pp, shop, state, LLM.from_env(), mode)

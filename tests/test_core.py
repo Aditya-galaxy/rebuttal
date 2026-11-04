@@ -470,3 +470,42 @@ def test_bridge_round_trip_tool_calls():
     assert kinds == ["message", "function_call"] and resp["output"][1]["call_id"] == "c2"
     stream = b"".join(rb.events(resp)).decode()
     assert stream.count("event: response.output_item.done") == 2 and "event: response.completed" in stream
+
+
+def test_llm_moves_to_the_next_endpoint_when_one_is_busy():
+    import httpx
+
+    from rebuttal.agent import LLM
+    seen = []
+
+    def handler(request):
+        seen.append(str(request.url))
+        if "busy" in str(request.url):
+            return httpx.Response(429, json={"error": {"message": "Resource exhausted"}})
+        return httpx.Response(200, json={"choices": [{"message": {"content": "ok"}}]})
+
+    client = httpx.Client(transport=httpx.MockTransport(handler), base_url="https://busy.example/v1/")
+    llm = LLM(None, "m", "https://busy.example/v1/", http=client, token=lambda: "t",
+              fallback_bases=["https://spare.example/v1/"])
+    assert llm.chat([{"role": "user", "content": "hi"}], [])["content"] == "ok"
+    assert seen == ["https://busy.example/v1/chat/completions", "https://spare.example/v1/chat/completions"]
+
+
+def test_agent_is_sent_back_once_when_it_picks_another_action(world):
+    shop, _ = world
+    d, a = case(world, "PP-D-1002")                  # the cost comparison says partial_refund
+    plan = {"summary": "", "claims": [], "evidence": [], "buyer_message": "Hi"}
+    llm = ScriptedLLM([("submit_plan", {**plan, "action": "fight"}),
+                       ("submit_plan", {**plan, "action": "partial_refund", "offer_amount": 18.6})])
+    p = investigate(d, shop, a, llm)
+    assert p["action"] == "partial_refund" and "Sent back" in p["trace"][0]["note"]
+
+
+def test_catalogue_refresh_fixes_old_saved_photos(tmp_path):
+    from rebuttal.shop import seed_catalog
+    shop = Shop(tmp_path / "shop.db")
+    shop.add_product("CHAI-RUST", "Chai Cups", "old", "62.00", "x", ["cups-set.jpg"])   # an old database
+    seed_catalog(shop)
+    seed_catalog(shop)                                                                 # and again: no duplicates
+    assert shop.product("CHAI-RUST")["photos"] == ["chai-rust.jpg"]
+    assert len(shop.photos(sku="CHAI-RUST", source="listing")) == 1

@@ -38,7 +38,8 @@ Rules:
 1. Facts come only from tool results. Every claim you make must list the record ids it rests on
    (like "order:EC-2041", "shipment:EC-2041", "message:3", "product:VASE-INDIGO", "policy:returns",
    or "dispute:<this dispute's id>" for what the buyer told PayPal).
-   Never invent tracking numbers, dates, names or amounts.
+   Never cite get_assessment itself: it is a calculation, not a record; cite the records listed in
+   its "citations". Never invent tracking numbers, dates, names or amounts.
 2. Call get_assessment early. Its strength rating and cost comparison are Rebuttal's own estimate
    from the records (not PayPal's). Submit its recommended action unless a record you fetched shows
    one of its findings is wrong; if you merely think another action is better, keep the recommended
@@ -115,17 +116,22 @@ class LLM:
     (Vertex AI tokens expire hourly); otherwise `api_key` is used."""
 
     def __init__(self, api_key: str | None, model: str = DEFAULT_MODEL, base_url: str = DEFAULT_BASE,
-                 http: httpx.Client | None = None, token: Callable[[], str] | None = None):
+                 http: httpx.Client | None = None, token: Callable[[], str] | None = None,
+                 fallback_bases: list[str] | None = None):
         self.model = model
         self.token = token or (lambda: api_key or "")
         self.http = http or httpx.Client(base_url=base_url, timeout=180)
+        # Other endpoints to try when one is out of capacity (Vertex AI locations).
+        self.bases = [base_url, *(fallback_bases or [])]
 
     @classmethod
     def from_env(cls) -> LLM | None:
         """Gemini on Vertex AI when VERTEX_PROJECT is set (unless LLM_PROVIDER=nebius), else Nebius."""
         if vertex.project() and os.environ.get("LLM_PROVIDER", "vertex") == "vertex":
-            return cls(None, os.environ.get("VERTEX_MODEL", vertex.AGENT_MODEL), vertex.openai_base(),
-                       token=vertex.token)
+            model = os.environ.get("VERTEX_MODEL", vertex.AGENT_MODEL)
+            others = [] if "preview" in model else [
+                vertex.openai_base(loc) for loc in vertex.FALLBACK_LOCATIONS if loc != vertex.location()]
+            return cls(None, model, vertex.openai_base(), token=vertex.token, fallback_bases=others)
         key = os.environ.get("LLM_API_KEY") or os.environ.get("NEBIUS_API_KEY")
         if not key:
             return None
@@ -134,11 +140,17 @@ class LLM:
     def chat(self, messages: list[dict], tools: list[dict]) -> dict:
         body = {"model": self.model, "messages": messages, "temperature": 0.2,
                 "tools": [{"type": "function", "function": t} for t in tools], "tool_choice": "auto"}
-        for attempt in range(4):
-            r = self.http.post("chat/completions", json=body, headers={"Authorization": f"Bearer {self.token()}"})
+        # Busy (429) or failing (5xx): move to the next endpoint at once, and wait only once all of
+        # them have been tried.
+        tries = len(self.bases) + 3
+        for attempt in range(tries):
+            base = self.bases[attempt % len(self.bases)]
+            r = self.http.post(base + "chat/completions" if attempt else "chat/completions", json=body,
+                               headers={"Authorization": f"Bearer {self.token()}"})
             if r.status_code < 500 and r.status_code != 429:
                 break
-            time.sleep(3 * 2 ** attempt)   # 3, 6, 12 s: rate limits need more room than blips
+            if attempt + 1 >= len(self.bases):
+                time.sleep(3 * 2 ** (attempt + 1 - len(self.bases)))
         r.raise_for_status()
         return r.json()["choices"][0]["message"]
 
@@ -158,6 +170,7 @@ def investigate(dispute: dict, shop, a: Assessment, llm: LLM | None, trace: list
         {"role": "user", "content": f"New dispute {dispute['dispute_id']} needs a response. "
          f"{hours_left(dispute) or 0:.0f} hours left. Investigate and submit a plan."},
     ]
+    sent_back = False
     try:
         for _ in range(MAX_STEPS):
             msg = llm.chat(messages, TOOLS)
@@ -174,6 +187,16 @@ def investigate(dispute: dict, shop, a: Assessment, llm: LLM | None, trace: list
                 except json.JSONDecodeError:
                     args = {}
                 if name == "submit_plan":
+                    if args.get("action") != a.recommended and not sent_back:
+                        # The cost comparison decides the action; give the model one chance to redo the
+                        # wording for it rather than ship notes written for a different action.
+                        sent_back = True
+                        trace.append({"tool": name, "args": {"action": args.get("action")},
+                                      "note": f"Sent back: the cost comparison recommends {a.recommended}."})
+                        messages.append({"role": "tool", "tool_call_id": call["id"], "content": json.dumps({
+                            "error": f"Not accepted. Submit the recommended action '{a.recommended}' and write the "
+                                     "notes and buyer message for it. Put any disagreement in the summary."})})
+                        continue
                     trace.append({"tool": name, "args": {"action": args.get("action")}})
                     return _to_plan(args, dispute, shop, a, trace, llm.model)
                 result = _call(tools[name], args) if name in tools else {"error": f"unknown tool {name}"}
