@@ -30,8 +30,10 @@ claims, and posting an item back to India costs more than many items are worth.
    [AG Grid](https://www.ag-grid.com/) (Community edition): sort by time left, amount or evidence
    strength, filter any column, search across buyers and items, with a pinned total of the money
    in dispute. A seller with forty open cases sees the next one to answer at the top.
-2. **Investigates.** A tool-using AI agent reads the dispute, the order, the carrier's event
-   history, the emails with the buyer, the listing and the shop's policies.
+2. **Investigates.** A tool-using AI agent (Gemini on Google Cloud Vertex AI) reads the dispute, the
+   order, the carrier's event history, the emails with the buyer, the listing and the shop's policies.
+   In "not as described" cases it also asks Gemini to compare the photo the buyer sent with the
+   listing photo.
 3. **Decides with numbers, not vibes.** Code, not the model, rates the evidence (strong, medium or
    weak) and compares the expected cost of each option: fight, partial refund (buyer keeps the item),
    refund after return, or refund in full. Rebuttal says "refund this one" when the records say
@@ -80,11 +82,18 @@ Open a case, read the investigation and the checks, click **Approve**, then use 
 to have PayPal rule on it. In **Storefront**, you can buy something, choose what happens to the
 parcel, and open a dispute as the buyer.
 
-Without a model key, plans are written from templates. To see the agent, set any OpenAI-compatible
-key first (we used Nebius Token Factory):
+Without a model, plans are written from templates (the case page says so). To see the agent, either
+use Gemini on Vertex AI with your Google Cloud project:
 
 ```bash
-LLM_API_KEY=... uv run uvicorn rebuttal.web:app --port 8777
+gcloud auth application-default login
+VERTEX_PROJECT=<your-project> uv run uvicorn rebuttal.web:app --port 8777
+```
+
+or any OpenAI-compatible API with tool calls (we also ran it on DeepSeek V4 Pro on Nebius Token Factory):
+
+```bash
+LLM_PROVIDER=nebius LLM_API_KEY=... uv run uvicorn rebuttal.web:app --port 8777
 ```
 
 ## Run it against the PayPal sandbox
@@ -110,10 +119,14 @@ LLM_API_KEY=... uv run uvicorn rebuttal.web:app --port 8777
 - Rebuttal picked it up, the agent drafted a cited statement, and all checks passed. After approval,
   PayPal's dispute record shows the statement and `proof-of-delivery.pdf` under
   `supporting_info`, `source: SUBMITTED_BY_SELLER`.
-
 - The hosted sandbox service receives `CUSTOMER.DISPUTE.*` webhooks and checks each one with PayPal's
   `verify-webhook-signature`. PayPal's own simulated event passed the check. An unsigned POST
   is refused with 400.
+
+- Order `EC-2073` shipped on the real clock (FedEx from Jaipur, about four days to a signed delivery);
+  PayPal's tracker moves from Shipped to Delivered when it arrives.
+- On the hosted demo, Gemini 2.5 Flash on Vertex AI drafts all four demo cases with every check
+  passing, and the photo check runs on the chai-cup case.
 
 That run is also why Rebuttal handles claims already under review. Real dispute objects can return
 `null` for `messages`, `allowed_response_options` and the due date, and the code is written for that.
@@ -122,7 +135,8 @@ That run is also why Rebuttal handles claims already under review. Real dispute 
 
 | Part | Done by |
 |---|---|
-| Reading the dispute and the records, choosing what matters | Agent (tool calls) |
+| Reading the dispute and the records, choosing what matters | Agent (Gemini, tool calls) |
+| Comparing the buyer's photo with the listing photo | Gemini vision, shown as an AI observation |
 | Writing the statement to PayPal and the buyer message | Agent |
 | Evidence strength, cost of each option, recommended action | Code (`playbook.py`) |
 | Whether anything may be sent | Code (`gate.py`) |
@@ -182,7 +196,8 @@ tools/make_images.py   Generates the demo shop's images with Gemini on Vertex AI
 frontend/           The Insights page script (AG Studio report and data model), built to static/insights.js
   persist.py        Keeps the SQLite files on a mounted folder across restarts
   cli.py            `rebuttal check`
-tests/test_core.py  24 tests: decisions, every gate rule, PayPal rules, the agent loop, webhooks
+tests/test_core.py  40 tests: decisions, every gate rule, PayPal rules, the agent loop and its fallbacks,
+                    webhooks, Insights data, the AI proxy, carrier timing, concurrency
 ```
 
 ```bash
@@ -226,6 +241,12 @@ they change.
   return shipping cost come from Settings.
 - **Sandbox outcomes.** The sandbox only lets `adjudicate` run in certain states. A claim that opens
   directly into review stays "in review".
+- **Generated images.** Ember & Clay is fictional; its product photos, banner and the buyer's photo
+  are AI-generated (see `tools/make_images.py`).
+- **Photo checks are observations.** Gemini's photo comparison informs the draft and is labelled as AI;
+  it never changes the computed evidence strength.
+- **Insights assistant off.** AG Studio's built-in AI assistant is off in the hosted demo (see
+  "Building the Insights page" for why).
 
 ## License
 
