@@ -6,9 +6,13 @@ see nothing was invented. PayPal accepts PDF, JPG, PNG and GIF; we send PDFs.
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from fpdf import FPDF
 
 from .playbook import parse_time
+
+IMAGES = Path(__file__).parent / "static" / "img"
 
 INK = (28, 31, 38)
 MUTED = (110, 116, 128)
@@ -124,16 +128,48 @@ def messages(shop_name: str, order: dict, msgs: list[dict]) -> bytes:
     return bytes(pdf.output())
 
 
-def listing(shop_name: str, product: dict, policy: dict | None) -> bytes:
-    sources = [f"product:{product['sku']}"] + (["policy:returns"] if policy else [])
+def listing(shop_name: str, product: dict, policy: dict | None, photo: dict | None = None) -> bytes:
+    sources = [f"product:{product['sku']}"] + ([f"photo:{photo['id']}"] if photo else []) + (
+        ["policy:returns"] if policy else [])
     pdf = _Doc("Listing and return policy", shop_name, sources)
     pdf.kv([("Item", product["title"]), ("Listing", product["listing_url"]), ("Price", f"${product['price']}")])
+    if photo:
+        pdf.image(str(IMAGES / photo["file"]), w=70)
+        pdf.set_font("Helvetica", "", 8.5)
+        pdf.set_text_color(*MUTED)
+        pdf.cell(0, 6, _safe(f"Listing photo, as shown to buyers ({photo['caption']})"), new_x="LMARGIN", new_y="NEXT")
+        pdf.ln(2)
     pdf.h2("Description shown to the buyer")
     pdf.para(product["description"])
     if policy:
         pdf.h2(policy["title"])
         pdf.para(policy["body"])
         pdf.para(f"Published at {policy['url']}", size=8.5)
+    return bytes(pdf.output())
+
+
+def photo_comparison(shop_name: str, order: dict, listing_photo: dict, buyer_photo: dict,
+                     check: dict | None) -> bytes:
+    sources = [f"order:{order['id']}", f"photo:{listing_photo['id']}", f"photo:{buyer_photo['id']}"]
+    pdf = _Doc("Listing photo and the buyer's photo", shop_name, sources)
+    pdf.kv([("Order", order["id"]), ("Buyer's photo", f"Sent {_when(buyer_photo['at'])}")])
+    y = pdf.get_y()
+    pdf.image(str(IMAGES / listing_photo["file"]), x=18, y=y, w=84)
+    pdf.image(str(IMAGES / buyer_photo["file"]), x=108, y=y, w=84)
+    pdf.set_y(y + 86)
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(*MUTED)
+    pdf.cell(90, 6, "Listing photo (what the buyer saw)")
+    pdf.cell(0, 6, "Photo the buyer sent", new_x="LMARGIN", new_y="NEXT")
+    if check:
+        pdf.h2("What the photos show")
+        pdf.para(check["observation"])
+        pdf.para(f"Differences: {check['differences']}")
+        pdf.para(f"Visible damage: {'yes' if check['damage_visible'] else 'none'}. "
+                 f"Variation disclosed in the listing covers the difference: "
+                 f"{'yes' if check['disclosed_variation_explains_it'] else 'no'}.")
+        pdf.para(f"Observation by an AI model ({check.get('model', 'Gemini')}, Google Vertex AI) from the two "
+                 "photos, reviewed by the seller before sending.", size=8.5)
     return bytes(pdf.output())
 
 

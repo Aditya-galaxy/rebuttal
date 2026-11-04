@@ -20,6 +20,7 @@
     const names = {get_dispute: "Read the PayPal dispute", get_assessment: "Weighed the evidence and the costs",
       find_order: "Found the order", get_shipment: "Read the carrier history", get_messages: "Read your emails",
       get_product: "Read the listing", get_policy: "Read your policies", submit_plan: "Wrote the plan",
+      check_photos: "Compared the buyer's photo with the listing (Gemini)",
       fallback: "Fell back to templates", rules: "Wrote the plan from templates"};
     setInterval(async () => {
       const r = await fetch(tr.dataset.trace).then(r => r.json()).catch(() => null);

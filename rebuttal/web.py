@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
@@ -17,7 +18,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
-from . import insights
+from . import insights, photos, responses_bridge, vertex
 from .engine import Engine
 from .fake_paypal import FakePayPal
 from .paypal import PayPalError
@@ -111,6 +112,19 @@ def reset_demo():
     return RedirectResponse("/", 303)
 
 
+@app.on_event("startup")
+def _logging():
+    """uvicorn's logging setup disables loggers created before it ran, which includes ours."""
+    logger = logging.getLogger("rebuttal")
+    logger.disabled = False
+    logger.setLevel(logging.INFO)
+    if not logger.handlers:
+        handler = logging.StreamHandler()
+        handler.setFormatter(logging.Formatter("%(levelname)s:     rebuttal: %(message)s"))
+        logger.addHandler(handler)
+        logger.propagate = False
+
+
 @app.on_event("shutdown")
 def _flush():
     if engine and engine.snapshots:
@@ -149,7 +163,30 @@ def case_page(request: Request, dispute_id: str):
         submitted=[ev for ev in (d.get("evidences") or []) if ev.get("source") == "SUBMITTED_BY_SELLER"],
         actions=ACTION_LABELS, settings=settings, is_fake=isinstance(e.pp, FakePayPal),
         can_adjudicate=any(lk.get("rel") == "adjudicate" for lk in d.get("links", [])),
-        error=request.query_params.get("error")))
+        error=request.query_params.get("error"), **_photo_context(e, order)))
+
+
+def _photo_context(e: Engine, order: dict | None) -> dict:
+    """The listing photo and any photo the buyer sent, with Gemini's comparison if it has run."""
+    if not order or not order["items"]:
+        return {"listing_photo": None, "buyer_photo": None, "photo_check": None, "can_check_photos": False}
+    listing = e.shop.photos(sku=order["items"][0]["sku"], source="listing")
+    buyer = e.shop.photos(order_id=order["id"], source="buyer")
+    return {"listing_photo": listing[0] if listing else None, "buyer_photo": buyer[-1] if buyer else None,
+            "photo_check": e.shop.photo_check(buyer[-1]["id"]) if buyer else None,
+            "can_check_photos": bool(buyer and listing and vertex.project())}
+
+
+@app.post("/case/{dispute_id}/photos")
+def check_photos(dispute_id: str):
+    e = eng()
+    case, a, _ = e.context(dispute_id)
+    if a.order_id:
+        words = " ".join(m.get("content", "") for m in case["dispute"].get("messages") or []
+                         if m.get("posted_by") == "BUYER")
+        if not photos.check(e.shop, a.order_id, words):
+            return RedirectResponse(f"/case/{dispute_id}?error=The photo check couldn't run right now.", 303)
+    return RedirectResponse(f"/case/{dispute_id}", 303)
 
 
 @app.get("/case/{dispute_id}/status")
@@ -379,9 +416,11 @@ async def webhook(request: Request):
 # --- Insights: AG Studio over the dispute history, with an AI assistant ---------------------
 
 AG_STUDIO_CDN = "https://cdn.jsdelivr.net/npm/ag-studio@3.0.0/dist/umd/ag-studio.min.js"
-# AG Studio's AI assistant runs several sub-agents built around OpenAI's models. With the Nebius models
-# tried (DeepSeek V4 Pro, Qwen3 235B, Kimi K2.6, MiniMax M3) its data agent stalls without finishing,
-# so the assistant is off unless INSIGHTS_AI=1, ideally pointed at OpenAI with the INSIGHTS_LLM_* settings.
+# AG Studio's AI assistant runs several sub-agents built around OpenAI's strict-schema tool calls. Its data
+# agent's query tool has a recursive schema that other providers can't take as-is: with Nebius models
+# (DeepSeek V4 Pro, Qwen3 235B, Kimi K2.6, MiniMax M3) it stalled, and Vertex AI's Gemini endpoints reject
+# the schema, so through the simplified one its queries fail. Off by default; INSIGHTS_AI=1 with
+# INSIGHTS_LLM_* (OpenAI) turns it on, INSIGHTS_AI=vertex tries Gemini (experimental).
 INSIGHTS_MODEL = "gpt-5.4-mini"
 
 
@@ -416,8 +455,11 @@ async def ai_responses(request: Request):
         body = await request.json()
     except ValueError:
         return JSONResponse({"error": {"message": "Request body must be JSON."}}, 400)
+    body["max_output_tokens"] = min(int(body.get("max_output_tokens") or 8000), 8000)
+    if _insights_provider() == "vertex":
+        return await _ai_via_vertex(body)
     model = os.environ.get("INSIGHTS_LLM_MODEL", INSIGHTS_MODEL)
-    body.update(model=model, max_output_tokens=min(int(body.get("max_output_tokens") or 8000), 8000))
+    body["model"] = model
     _give_ids(body.get("input"))
     base = os.environ.get("INSIGHTS_LLM_BASE_URL", "https://api.openai.com/v1/")
     key = os.environ.get("INSIGHTS_LLM_API_KEY", "")
@@ -438,8 +480,47 @@ async def ai_responses(request: Request):
                              media_type=upstream.headers.get("content-type", "application/json"))
 
 
+def _insights_provider() -> str | None:
+    """INSIGHTS_AI=1 with an OpenAI key, or INSIGHTS_AI=vertex (experimental: Gemini runs the
+    assistant's top level, but its data agent's queries fail on the simplified schemas). Off otherwise."""
+    if os.environ.get("INSIGHTS_AI") == "1" and os.environ.get("INSIGHTS_LLM_API_KEY"):
+        return "openai"
+    if os.environ.get("INSIGHTS_AI") == "vertex" and vertex.project():
+        return "vertex"
+    return None
+
+
 def _insights_ai_on() -> bool:
-    return os.environ.get("INSIGHTS_AI") == "1" and bool(os.environ.get("INSIGHTS_LLM_API_KEY"))
+    return _insights_provider() is not None
+
+
+async def _ai_via_vertex(body: dict):
+    """Answer a Responses API request with Gemini's Chat Completions on Vertex AI (see responses_bridge)."""
+    model = os.environ.get("INSIGHTS_VERTEX_MODEL", vertex.INSIGHTS_MODEL)
+    chat = responses_bridge.to_chat(body, model)
+    # A 429 here means the location's shared capacity is busy, so move to the next location before
+    # waiting; AG Studio's sub-agents send bursts of calls.
+    locations = vertex.FALLBACK_LOCATIONS if "preview" not in model else ["global"]
+    async with httpx.AsyncClient(timeout=httpx.Timeout(60, connect=10)) as client:
+        for attempt in range(8):
+            token = await run_in_threadpool(vertex.token)
+            try:
+                r = await client.post(vertex.openai_base(locations[attempt % len(locations)]) + "chat/completions",
+                                      json=chat, headers={"Authorization": f"Bearer {token}"})
+            except httpx.TimeoutException:
+                log.warning("insights assistant: %s timed out, trying the next location",
+                            locations[attempt % len(locations)])
+                continue
+            if r.status_code not in (429, 500, 503):
+                break
+            await asyncio.sleep(1 if attempt < len(locations) - 1 else 4)
+    if r.status_code >= 400:
+        detail = r.text[:300]
+        log.warning("insights assistant: Vertex returned %s: %s", r.status_code, detail)
+        return JSONResponse({"error": {"message": f"The model returned an error ({r.status_code})."}}, 502)
+    response = responses_bridge.to_response(r.json(), model)
+    return StreamingResponse(responses_bridge.events(response), media_type="text/event-stream",
+                             headers={"Cache-Control": "no-store"})
 
 
 def _give_ids(items) -> None:

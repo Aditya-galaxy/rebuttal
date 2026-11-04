@@ -35,6 +35,7 @@ PLAYBOOK: dict[str, list[dict]] = {
         {"type": "ITEM_DESCRIPTION", "what": "The listing as the buyer saw it, including any disclosure "
          "that matches the complaint", "doc": "listing"},
         {"type": "RETURN_POLICY", "what": "The published return policy", "doc": "policy"},
+        {"type": "OTHER", "what": "The listing photo beside the photo the buyer sent", "doc": "photos"},
         {"type": "OTHER", "what": "Messages with the buyer about the issue", "doc": "messages"},
     ],
     "UNAUTHORISED": [

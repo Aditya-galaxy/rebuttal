@@ -57,6 +57,22 @@
       <div class="cites">{% for ci in a.citations %}<code>{{ ci }}</code>{% endfor %}</div>
     </div>
 
+    {% if buyer_photo and listing_photo %}
+    <div class="card">
+      <h2>Photos</h2>
+      <div class="photo-pair">
+        <figure><img src="/static/img/{{ listing_photo.file }}" alt="Listing photo"><figcaption>Listing photo (what the buyer saw)</figcaption></figure>
+        <figure><img src="/static/img/{{ buyer_photo.file }}" alt="Photo the buyer sent"><figcaption>Photo the buyer sent · {{ buyer_photo.at|when }}</figcaption></figure>
+      </div>
+      {% if photo_check %}
+        <div class="ai-note"><b>Photo check · {{ photo_check.model }} on Vertex AI</b>{{ photo_check.observation }}
+          <div class="muted small" style="margin-top:6px">Same item: {{ 'yes' if photo_check.same_item else 'no' }} · Visible damage: {{ 'yes' if photo_check.damage_visible else 'none' }} · Covered by the listing's disclosure: {{ 'yes' if photo_check.disclosed_variation_explains_it else 'no' }}</div></div>
+      {% elif can_check_photos %}
+        <form method="post" action="/case/{{ c.dispute_id }}/photos" onsubmit="this.querySelector('button').disabled=true;this.querySelector('button').textContent='Comparing…'"><button class="btn ghost small" type="submit">Compare the photos with Gemini</button></form>
+      {% endif %}
+    </div>
+    {% endif %}
+
     {% if shipment %}
     <div class="card">
       <h2>{{ shipment.carrier }} {{ shipment.tracking_number }}</h2>
@@ -109,7 +125,7 @@
           <div class="ev">
             <div class="evhead"><span class="tag">{{ ev.evidence_type|evlabel }}</span>
               {% if ev.tracking %}<span class="muted small">tracking {{ ev.tracking.carrier_name }} {{ ev.tracking.tracking_number }}</span>{% endif %}
-              {% if ev.doc %}{% set fname = 'listing-and-policy.pdf' if ev.doc == 'policy' else {'delivery':'proof-of-delivery.pdf','receipt':'order-receipt.pdf','messages':'buyer-messages.pdf','listing':'listing-and-policy.pdf'}[ev.doc] %}
+              {% if ev.doc %}{% set fname = 'listing-and-policy.pdf' if ev.doc == 'policy' else {'delivery':'proof-of-delivery.pdf','receipt':'order-receipt.pdf','messages':'buyer-messages.pdf','listing':'listing-and-policy.pdf','photos':'photo-comparison.pdf'}[ev.doc] %}
                 <a class="doc" href="/case/{{ c.dispute_id }}/doc/{{ fname }}" target="_blank">📄 {{ fname }}</a>{% endif %}
             </div>
             <textarea name="notes" rows="{{ 6 if loop.first else 2 }}" maxlength="2000" {{ 'readonly' if c.status in ('sent','closed') }}>{{ ev.notes }}</textarea>

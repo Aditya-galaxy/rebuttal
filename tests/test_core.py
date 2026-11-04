@@ -387,6 +387,7 @@ def test_insights_assistant_is_off_unless_configured(monkeypatch):
 
     from rebuttal import web
     monkeypatch.delenv("INSIGHTS_AI", raising=False)
+    monkeypatch.delenv("VERTEX_PROJECT", raising=False)
     r = TestClient(web.app).post("/api/ai/responses", json={"input": "hi"})
     assert r.status_code == 503
 
@@ -408,3 +409,64 @@ def test_ai_rate_limit_per_visitor_and_per_day():
     rl = RateLimit(per_visitor=2, per_day=3)
     assert rl.allow("a") and rl.allow("a") and not rl.allow("a")
     assert rl.allow("b") and not rl.allow("c")
+
+
+def test_agent_ignores_extra_tool_arguments_and_reports_missing_ones(world):
+    shop, _ = world
+    d, a = case(world, "PP-D-1001")
+    llm = ScriptedLLM([
+        ("get_dispute", {"dispute_id": "PP-D-1001"}),            # extra argument: dropped
+        ("get_shipment", {}),                                       # missing argument: reported
+        ("submit_plan", {"action": "fight", "summary": "", "claims": [], "evidence": [], "buyer_message": ""}),
+    ])
+    p = investigate(d, shop, a, llm)
+    assert p["author"] == "scripted"
+    assert "PP-D-1001" in p["trace"][0]["result"] and "missing argument" in p["trace"][1]["result"]
+
+
+def test_gate_accepts_the_dispute_itself_as_a_citation_but_not_other_disputes(world):
+    shop, _ = world
+    d, a = case(world, "PP-D-1003")
+    p = plans.rules_plan(d, shop, a)
+    p["claims"].append({"text": "The buyer says tracking stopped.", "cites": ["dispute:PP-D-1003"]})
+    assert gate.run(p, d, shop, a, Settings()).passed
+    p["claims"].append({"text": "Another case.", "cites": ["dispute:PP-D-1001"]})
+    assert not gate.run(p, d, shop, a, Settings()).passed
+
+
+def test_bridge_schema_simplifier_stays_small_on_recursive_schemas():
+    import json
+
+    from rebuttal.responses_bridge import simplify
+    # An expression type that refers to itself several times per level, like AG Studio's query schema.
+    schema = {"$defs": {"expr": {"type": "object", "properties": {
+        "op": {"type": "string"}, "left": {"$ref": "#/$defs/expr"}, "right": {"$ref": "#/$defs/expr"},
+        "args": {"type": "array", "items": {"$ref": "#/$defs/expr"}},
+        "maybe": {"anyOf": [{"$ref": "#/$defs/expr"}, {"type": "null"}]}}}},
+        "type": "object", "properties": {"query": {"$ref": "#/$defs/expr"}}, "additionalProperties": False}
+    out = simplify(schema)
+    assert len(json.dumps(out)) < 5000
+    assert "additionalProperties" not in json.dumps(out)
+    assert out["properties"]["query"]["properties"]["left"]["type"] == "object"
+
+
+def test_bridge_round_trip_tool_calls():
+    from rebuttal import responses_bridge as rb
+    body = {"instructions": "be brief", "input": [
+        {"type": "message", "role": "user", "content": [{"type": "input_text", "text": "hi"}]},
+        {"type": "message", "role": "assistant", "content": [{"type": "output_text", "text": "checking"}]},
+        {"type": "function_call", "call_id": "c1", "name": "view_page", "arguments": "{}"},
+        {"type": "function_call_output", "call_id": "c1", "output": "{\"ok\":true}"}],
+        "tools": [{"type": "function", "name": "view_page", "parameters": {"type": "object", "properties": {}}}],
+        "tool_choice": "auto"}
+    chat = rb.to_chat(body, "google/gemini-2.5-flash")
+    roles = [m["role"] for m in chat["messages"]]
+    assert roles == ["system", "user", "assistant", "tool"]
+    assert chat["messages"][2]["tool_calls"][0]["id"] == "c1"
+    reply = {"choices": [{"message": {"content": "done", "tool_calls": [
+        {"id": "c2", "function": {"name": "view_page", "arguments": "{}"}}]}}]}
+    resp = rb.to_response(reply, "m")
+    kinds = [o["type"] for o in resp["output"]]
+    assert kinds == ["message", "function_call"] and resp["output"][1]["call_id"] == "c2"
+    stream = b"".join(rb.events(resp)).decode()
+    assert stream.count("event: response.output_item.done") == 2 and "event: response.completed" in stream

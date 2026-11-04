@@ -25,6 +25,9 @@ create table if not exists shipments (
 create table if not exists messages (
     id integer primary key autoincrement, order_id text, at text, sender text, channel text, body text);
 create table if not exists policies (kind text primary key, title text, body text, url text);
+create table if not exists photos (
+    id integer primary key autoincrement, sku text, order_id text, source text, file text, caption text, at text);
+create table if not exists photo_checks (photo_id integer primary key, result text, model text, at text);
 """
 
 
@@ -112,12 +115,37 @@ class Shop:
     def policies(self) -> list[dict]:
         return [dict(r) for r in self.db.execute("select * from policies order by kind")]
 
+    def photos(self, *, sku: str | None = None, order_id: str | None = None, source: str | None = None) -> list[dict]:
+        """Photos on file: the listing's (source 'listing', by sku) and any a buyer sent (source 'buyer')."""
+        sql, args = "select * from photos where 1=1", []
+        for col, val in (("sku", sku), ("order_id", order_id), ("source", source)):
+            if val is not None:
+                sql += f" and {col} = ?"
+                args.append(val)
+        return [dict(r) for r in self.db.execute(sql + " order by id", tuple(args))]
+
+    def add_photo(self, source: str, file: str, caption: str, sku: str | None = None, order_id: str | None = None,
+                  at: str | None = None) -> int:
+        self.db.execute("insert into photos (sku, order_id, source, file, caption, at) values (?,?,?,?,?,?)",
+                        (sku, order_id, source, file, caption, at or _now()))
+        self.db.commit()
+        return self.db.execute("select max(id) from photos").fetchone()[0]
+
+    def photo_check(self, photo_id: int) -> dict | None:
+        row = self.db.execute("select * from photo_checks where photo_id = ?", (photo_id,)).fetchone()
+        return {**json.loads(row["result"]), "model": row["model"], "at": row["at"]} if row else None
+
+    def save_photo_check(self, photo_id: int, result: dict, model: str) -> None:
+        self.db.execute("insert or replace into photo_checks values (?,?,?,?)",
+                        (photo_id, json.dumps(result), model, _now()))
+        self.db.commit()
+
     def record_exists(self, ref: str) -> bool:
         """Whether a citation like 'order:EC-2041' or 'message:12' points at a real record."""
         kind, _, key = ref.partition(":")
         table = {"order": ("orders", "id"), "shipment": ("shipments", "order_id"),
                  "message": ("messages", "id"), "product": ("products", "sku"),
-                 "policy": ("policies", "kind")}.get(kind)
+                 "policy": ("policies", "kind"), "photo": ("photos", "id")}.get(kind)
         if not table or not key:
             return False
         return self.db.execute(f"select 1 from {table[0]} where {table[1]} = ?", (key,)).fetchone() is not None
@@ -188,17 +216,23 @@ def seed_demo(shop: Shop, now: datetime | None = None) -> None:
 
     shop.add_product("VASE-INDIGO", "Indigo Moon Vase",
                      "Wheel-thrown stoneware vase, 32 cm, indigo crackle glaze. Ships in a double box.",
-                     "148.00", f"{SITE}/p/indigo-moon-vase", ["vase-front.jpg", "vase-packed.jpg"])
+                     "148.00", f"{SITE}/p/indigo-moon-vase", ["vase-indigo.jpg"])
     shop.add_product("CHAI-RUST", "Chai Cups, set of 4 (Rust glaze)",
                      "Four 150 ml cups. Each glaze is fired by hand, so colour varies from cup to cup and "
                      "from the photos; no two sets match.", "62.00", f"{SITE}/p/chai-cups-rust",
-                     ["cups-set.jpg", "cups-glaze-range.jpg"])
+                     ["chai-rust.jpg"])
     shop.add_product("COASTER-BLOCK", "Block-print coasters, set of 6",
                      "Hand-painted terracotta coasters with cork backs.", "35.00",
-                     f"{SITE}/p/block-print-coasters", ["coasters.jpg"])
+                     f"{SITE}/p/block-print-coasters", ["coaster-block.jpg"])
     shop.add_product("PLANTER-PAIR", "Terracotta planter pair",
                      "Two unglazed terracotta planters, 18 cm and 24 cm, with saucers.", "210.00",
-                     f"{SITE}/p/terracotta-planters", ["planters.jpg"])
+                     f"{SITE}/p/terracotta-planters", ["planter-pair.jpg"])
+
+    for sku, file, caption in (("VASE-INDIGO", "vase-indigo.jpg", "Indigo Moon Vase, listing photo"),
+                               ("CHAI-RUST", "chai-rust.jpg", "Chai Cups (Rust glaze), listing photo"),
+                               ("COASTER-BLOCK", "coaster-block.jpg", "Block-print coasters, listing photo"),
+                               ("PLANTER-PAIR", "planter-pair.jpg", "Terracotta planter pair, listing photo")):
+        shop.add_photo("listing", file, caption, sku=sku, at=a(60))
 
     shop.set_policy("returns", "Returns and refunds",
                     "Returns accepted within 30 days of delivery for items in original condition. "
@@ -240,7 +274,9 @@ def seed_demo(shop: Shop, now: datetime | None = None) -> None:
     ])
     shop.add_message("EC-2055", a(10), "buyer", "email",
                      "The cups arrived safely, thank you. They are a lot darker than the photos though, "
-                     "more brown than rust. Is that normal?")
+                     "more brown than rust. Is that normal? Photo attached.")
+    shop.add_photo("buyer", "buyer-chai-rust.jpg", "Photo the buyer emailed with their message", order_id="EC-2055",
+                   at=a(10))
     shop.add_message("EC-2055", a(9.5), "seller", "email",
                      "Hi Priya, thank you for writing. Each glaze is fired by hand so the colour shifts "
                      "from kiln to kiln, as the listing mentions. If you'd like, I can offer a partial "

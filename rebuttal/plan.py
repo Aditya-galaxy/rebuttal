@@ -20,7 +20,8 @@ ACTION_LINK = {"fight": "provide_evidence", "supporting_info": "provide_supporti
                "refund": "accept_claim", "message": "send_message"}
 OFFER_TYPE = {"partial_refund": "REFUND", "refund_with_return": "REFUND_WITH_RETURN"}
 DOC_FILES = {"delivery": "proof-of-delivery.pdf", "receipt": "order-receipt.pdf",
-             "messages": "buyer-messages.pdf", "listing": "listing-and-policy.pdf"}
+             "messages": "buyer-messages.pdf", "listing": "listing-and-policy.pdf",
+             "photos": "photo-comparison.pdf"}
 
 
 def rules_plan(dispute: dict, shop, a: Assessment, action: str | None = None) -> dict[str, Any]:
@@ -42,6 +43,8 @@ def rules_plan(dispute: dict, shop, a: Assessment, action: str | None = None) ->
         for i, item in enumerate(a.play):
             doc = item.get("doc")
             if doc == "messages" and not (order and shop.messages(order["id"])):
+                continue
+            if doc == "photos" and not (order and shop.photos(order_id=order["id"], source="buyer")):
                 continue
             ev: dict[str, Any] = {"evidence_type": item["type"], "doc": doc,
                                   "notes": statement if i == 0 else item["what"] + ".",
@@ -116,7 +119,15 @@ def documents(plan: dict, shop, dispute_id: str, a: Assessment) -> dict[str, byt
         elif doc in ("listing", "policy"):
             product = shop.product(order["items"][0]["sku"])
             if product:
-                out[DOC_FILES["listing"]] = evidence_docs.listing(SHOP_NAME, product, shop.policy("returns"))
+                pics = shop.photos(sku=product["sku"], source="listing")
+                out[DOC_FILES["listing"]] = evidence_docs.listing(SHOP_NAME, product, shop.policy("returns"),
+                                                                  pics[0] if pics else None)
+        elif doc == "photos":
+            buyer = shop.photos(order_id=order["id"], source="buyer")
+            listing = shop.photos(sku=order["items"][0]["sku"], source="listing") if order["items"] else []
+            if buyer and listing:
+                out[DOC_FILES["photos"]] = evidence_docs.photo_comparison(
+                    SHOP_NAME, order, listing[0], buyer[-1], shop.photo_check(buyer[-1]["id"]))
         elif doc == "receipt":
             out[DOC_FILES[doc]] = evidence_docs.receipt(SHOP_NAME, order, dispute_id)
     return out

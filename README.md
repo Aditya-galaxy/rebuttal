@@ -128,10 +128,19 @@ That run is also why Rebuttal handles claims already under review. Real dispute 
 | Whether anything may be sent | Code (`gate.py`) |
 | Sending | The seller's click, or autopilot under the seller's limit |
 
-- **Model.** Any OpenAI-compatible chat API with tool calls (`LLM_BASE_URL`, `LLM_API_KEY`,
-  `LLM_MODEL`). Default: `deepseek-ai/DeepSeek-V4-Pro` on Nebius Token Factory, about 25 s per case.
+- **Model.** Gemini 2.5 Flash on **Google Cloud Vertex AI** (`VERTEX_PROJECT`), through Vertex's
+  OpenAI-compatible endpoint: about 10–20 s per case. Without Vertex, any OpenAI-compatible chat API
+  with tool calls works (`LLM_BASE_URL`, `LLM_API_KEY`, `LLM_MODEL`); we also ran it on DeepSeek V4 Pro
+  on Nebius Token Factory.
+- **Photo evidence.** In "not as described" cases, Gemini compares the photo the buyer sent with the
+  listing photo and reports what visibly differs, whether the listing's own disclosure covers it, and
+  any damage. The case page shows it, the agent can cite it, and a photo-comparison PDF puts both
+  photos side by side, labelled as an AI observation.
+- **Images.** Ember & Clay is fictional, so its product photos, studio banner and the buyer's photo
+  were generated with Gemini 2.5 Flash Image on Vertex AI (`tools/make_images.py`). The buyer's photo
+  was made from the listing photo, so it shows the same cups as a customer would photograph them.
 - **Tools.** `get_dispute`, `get_assessment`, `find_order`, `get_shipment`, `get_messages`,
-  `get_product`, `get_policy`, `submit_plan`. The case page shows each step live while it runs, and
+  `get_product`, `get_policy`, `check_photos`, `submit_plan`. The case page shows each step live while it runs, and
   the full trace afterwards.
 - **Guardrails.** Buyer-written text reaches the model labelled as untrusted data. The model can't
   invent facts that get past the gate. If the model fails, Rebuttal falls back to a template plan and
@@ -166,6 +175,10 @@ rebuttal/
   web.py            FastAPI app: disputes board, case review, settings, storefront, webhook
   static/board.js   The disputes board as an AG Grid, with live countdown cells
   insights.py       The data behind Insights: every dispute's outcome, and orders and disputes by month
+  vertex.py         Google Cloud Vertex AI: Gemini (agent, photo checks) and image generation
+  photos.py         The Gemini photo check: the buyer's photo against the listing photo
+  responses_bridge.py  Responses API requests served by a Chat Completions model (experimental)
+tools/make_images.py   Generates the demo shop's images with Gemini on Vertex AI
 frontend/           The Insights page script (AG Studio report and data model), built to static/insights.js
   persist.py        Keeps the SQLite files on a mounted folder across restarts
   cli.py            `rebuttal check`
@@ -186,9 +199,11 @@ cd frontend && npm install && npm run build   # writes ../rebuttal/static/insigh
 
 AG Studio is a commercial product. Without a licence key it runs fully unlocked with a trial watermark;
 set `AG_STUDIO_LICENSE_KEY` to remove it. AG Studio's built-in AI assistant is wired up through a proxy
-(`/api/ai/responses`), but it is off by default. Its sub-agents are built around OpenAI's models, and
-with the Nebius models we tried, its data agent stalled. Set `INSIGHTS_AI=1` and `INSIGHTS_LLM_API_KEY`
-(OpenAI) to turn it on.
+(`/api/ai/responses`), but it is off by default. Its data agent's query tool has a recursive schema
+built for OpenAI's strict tool calling. With Nebius models its data agent stalled; Vertex AI's Gemini
+endpoints reject the schema, and through a simplified one (`responses_bridge.py`) its queries fail.
+Set `INSIGHTS_AI=1` with `INSIGHTS_LLM_API_KEY` (OpenAI) to turn it on, or `INSIGHTS_AI=vertex` to try
+Gemini.
 
 ## Running it as a container
 

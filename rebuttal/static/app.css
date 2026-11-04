@@ -183,7 +183,19 @@ textarea[readonly] { opacity: .8; }
 .product h3 { margin: 6px 0 0; font-size: 15.5px; }
 .product p { margin: 0; flex: 1; }
 .price { font-weight: 700; font-size: 18px; margin: 4px 0 6px; }
-.pimg { height: 150px; border-radius: 10px; }
+.pimg { height: 190px; width: 100%; border-radius: 10px; object-fit: cover; display: block; background: var(--paper); }
+.studio-banner { margin-top: 24px; height: 220px; border-radius: var(--radius); background-size: cover; background-position: center 45%;
+  display: flex; align-items: flex-end; padding: 20px 24px; color: #fff; position: relative; overflow: hidden; }
+.studio-banner::after { content: ""; position: absolute; inset: 0; background: linear-gradient(to top, rgba(20,16,12,.65), rgba(20,16,12,0) 60%); }
+.studio-banner div { position: relative; z-index: 1; display: grid; gap: 2px; }
+.studio-banner span { font: 600 30px/1.1 Fraunces, Georgia, serif; }
+.studio-banner small { font-size: 14px; opacity: .9; }
+.photo-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-bottom: 10px; }
+.photo-pair figure { margin: 0; }
+.photo-pair img { width: 100%; aspect-ratio: 1; object-fit: cover; border-radius: 10px; display: block; }
+.photo-pair figcaption { font-size: 12px; color: var(--muted); margin-top: 4px; }
+.ai-note { font-size: 13.5px; background: var(--blue-soft); color: var(--ink); border-radius: 10px; padding: 10px 12px; }
+.ai-note b { color: var(--blue); font-size: 12px; text-transform: uppercase; letter-spacing: .03em; display: block; margin-bottom: 3px; }
 .pimg-vase-indigo { background: radial-gradient(circle at 50% 70%, #2f4a8a 0 30%, transparent 31%), linear-gradient(#ece5da, #ddd3c4); }
 .pimg-chai-rust { background: radial-gradient(circle at 30% 60%, #9a4a25 0 14%, transparent 15%), radial-gradient(circle at 55% 62%, #8c4322 0 14%, transparent 15%), radial-gradient(circle at 78% 60%, #a5552c 0 13%, transparent 14%), linear-gradient(#efe7dc, #e0d4c3); }
 .pimg-coaster-block { background: repeating-linear-gradient(45deg, #c46d3f 0 10px, #d9895a 10px 20px); }

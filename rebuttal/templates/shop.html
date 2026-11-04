@@ -1,6 +1,9 @@
 {% extends "base.html" %}
 {% block title %}Storefront · Rebuttal{% endblock %}
 {% block main %}
+<section class="studio-banner" style="background-image: url('/static/img/studio.jpg')">
+  <div><span>Ember &amp; Clay</span><small>Handmade in Jaipur, shipped to your door</small></div>
+</section>
 <section class="hero"><div><h1>Ember &amp; Clay storefront</h1>
   <p class="lede">The demo studio's shop. {% if is_fake %}Buy something, choose what happens to the parcel, and open a dispute as the buyer. Rebuttal picks it up straight away.{% else %}Pay with a PayPal sandbox buyer account. Then open a dispute from that buyer's sandbox account, and Rebuttal picks it up.{% endif %}</p></div></section>
 
@@ -32,7 +35,8 @@
 <div class="products">
   {% for p in products %}
   <article class="product">
-    <div class="pimg pimg-{{ p.sku|lower }}" aria-hidden="true"></div>
+    {% if p.photos %}<img class="pimg" src="/static/img/{{ p.photos[0] }}" alt="{{ p.title }}" loading="lazy" width="900" height="900">
+    {% else %}<div class="pimg pimg-{{ p.sku|lower }}" aria-hidden="true"></div>{% endif %}
     <h3>{{ p.title }}</h3>
     <p class="muted small">{{ p.description }}</p>
     <div class="price">${{ p.price }}</div>

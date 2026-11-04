@@ -82,7 +82,8 @@ def run(plan: dict, dispute: dict, shop, a: Assessment, settings: Settings) -> V
 
     cites = [c for cl in plan.get("claims", []) for c in cl.get("cites", [])]
     cites += [c for e in plan.get("evidence", []) for c in e.get("cites", [])]
-    fake = sorted({c for c in cites if not shop.record_exists(c)})
+    own = f"dispute:{dispute['dispute_id']}"   # the PayPal dispute itself (the buyer's words are in it)
+    fake = sorted({c for c in cites if c != own and not shop.record_exists(c)})
     uncited = [cl["text"][:60] for cl in plan.get("claims", []) if not cl.get("cites")]
     checks.append(Check("Every fact cites a real record", not fake and not uncited,
                         (f"Unknown records: {', '.join(fake)}. " if fake else "")
