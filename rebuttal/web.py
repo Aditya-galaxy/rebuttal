@@ -5,15 +5,19 @@ from __future__ import annotations
 import json
 import logging
 import os
+import time
+import uuid
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
+import httpx
 from fastapi import FastAPI, Form, HTTPException, Request
-from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from starlette.concurrency import run_in_threadpool
 
+from . import insights
 from .engine import Engine
 from .fake_paypal import FakePayPal
 from .paypal import PayPalError
@@ -370,6 +374,104 @@ async def webhook(request: Request):
                 return JSONResponse({"ok": True, "ignored": "unknown dispute"})
             await run_in_threadpool(e.refresh, dispute)
     return JSONResponse({"ok": True})
+
+
+# --- Insights: AG Studio over the dispute history, with an AI assistant ---------------------
+
+AG_STUDIO_CDN = "https://cdn.jsdelivr.net/npm/ag-studio@3.0.0/dist/umd/ag-studio.min.js"
+# AG Studio's AI assistant runs several sub-agents built around OpenAI's models. With the Nebius models
+# tried (DeepSeek V4 Pro, Qwen3 235B, Kimi K2.6, MiniMax M3) its data agent stalls without finishing,
+# so the assistant is off unless INSIGHTS_AI=1, ideally pointed at OpenAI with the INSIGHTS_LLM_* settings.
+INSIGHTS_MODEL = "gpt-5.4-mini"
+
+
+@app.get("/insights", response_class=HTMLResponse)
+def insights_page(request: Request):
+    e = eng()
+    config = {"dataUrl": "/api/insights", "aiEnabled": _insights_ai_on(),
+              "licenseKey": os.environ.get("AG_STUDIO_LICENSE_KEY", "")}
+    return templates.TemplateResponse(request, "insights.html", _ctx(
+        request, config=config, studio_js=AG_STUDIO_CDN, generated=e.mode == "mock"))
+
+
+@app.get("/api/insights")
+def insights_data():
+    e = eng()
+    return insights.build(e, demo_history=e.mode == "mock")
+
+
+@app.post("/api/ai/responses")
+async def ai_responses(request: Request):
+    """The AG Studio assistant's model calls, forwarded with the server's key (never sent to the browser).
+
+    The demo is public, so calls are capped per visitor and per day, the model is fixed, and the
+    output length is bounded.
+    """
+    if not _insights_ai_on():
+        return JSONResponse({"error": {"message": "The assistant isn't configured on this server."}}, 503)
+    who = request.client.host if request.client else "?"
+    if not ai_limiter.allow(who):
+        return JSONResponse({"error": {"message": "That's a lot of questions; try again in a little while."}}, 429)
+    try:
+        body = await request.json()
+    except ValueError:
+        return JSONResponse({"error": {"message": "Request body must be JSON."}}, 400)
+    model = os.environ.get("INSIGHTS_LLM_MODEL", INSIGHTS_MODEL)
+    body.update(model=model, max_output_tokens=min(int(body.get("max_output_tokens") or 8000), 8000))
+    _give_ids(body.get("input"))
+    base = os.environ.get("INSIGHTS_LLM_BASE_URL", "https://api.openai.com/v1/")
+    key = os.environ.get("INSIGHTS_LLM_API_KEY", "")
+    client = httpx.AsyncClient(base_url=base, timeout=httpx.Timeout(180, connect=15))
+    upstream = await client.send(client.build_request(
+        "POST", "responses", json=body, headers={"Authorization": f"Bearer {key}"}), stream=True)
+
+
+    async def relay():
+        try:
+            async for chunk in upstream.aiter_bytes():   # decoded: upstream compresses
+                yield chunk
+        finally:
+            await upstream.aclose()
+            await client.aclose()
+
+    return StreamingResponse(relay(), status_code=upstream.status_code, headers={"Cache-Control": "no-store"},
+                             media_type=upstream.headers.get("content-type", "application/json"))
+
+
+def _insights_ai_on() -> bool:
+    return os.environ.get("INSIGHTS_AI") == "1" and bool(os.environ.get("INSIGHTS_LLM_API_KEY"))
+
+
+def _give_ids(items) -> None:
+    """Earlier output items sent back as input: OpenAI accepts them without an id, Nebius doesn't."""
+    prefix = {"message": "msg", "function_call": "fc", "reasoning": "rs"}
+    for item in items if isinstance(items, list) else []:
+        kind = item.get("type") if isinstance(item, dict) else None
+        if kind in prefix and not item.get("id") and (kind != "message" or item.get("role") == "assistant"):
+            item["id"] = f"{prefix[kind]}_{uuid.uuid4().hex}"
+
+
+class RateLimit:
+    """At most `per_visitor` calls per visitor per hour, and `per_day` in all."""
+
+    def __init__(self, per_visitor: int = 40, per_day: int = 600):
+        self.per_visitor, self.per_day = per_visitor, per_day
+        self.calls: dict[str, list[float]] = {}
+        self.day: list[float] = []
+
+    def allow(self, who: str) -> bool:
+        now = time.time()
+        mine = [t for t in self.calls.get(who, []) if now - t < 3600]
+        self.day = [t for t in self.day if now - t < 86400]
+        if len(mine) >= self.per_visitor or len(self.day) >= self.per_day:
+            self.calls[who] = mine
+            return False
+        self.calls[who] = [*mine, now]
+        self.day.append(now)
+        return True
+
+
+ai_limiter = RateLimit()
 
 
 @app.get("/health")

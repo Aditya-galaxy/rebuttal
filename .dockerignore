@@ -8,3 +8,4 @@ __pycache__
 tests
 PLAN.md
 .DS_Store
+frontend/node_modules

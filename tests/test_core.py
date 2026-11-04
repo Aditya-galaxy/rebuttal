@@ -363,3 +363,48 @@ def test_demo_reset_while_investigating_leaves_every_case_planned():
     cases = {c["dispute_id"]: c for c in e.state.all()}
     assert set(cases) == {"PP-D-1001", "PP-D-1002", "PP-D-1003", "PP-D-1004"}
     assert all(c["status"] == "ready" and c["plan"] for c in cases.values())
+
+
+def test_insights_data_labels_generated_history_and_keeps_sandbox_real(world):
+    from rebuttal import insights
+    from rebuttal.engine import Engine
+    from rebuttal.state import State
+    shop, pp = world
+    e = Engine(pp, shop, State(), None, "mock")
+    e.sync(wait=True)
+    demo = insights.build(e, demo_history=True)
+    live = insights.build(e, demo_history=False)
+    assert {d["source"] for d in live["disputes"]} == {"Live"} and len(live["disputes"]) == 4
+    generated = [d for d in demo["disputes"] if d["source"] == "Generated demo history"]
+    assert len(generated) == 64 and demo["generatedHistory"]
+    for d in demo["disputes"]:   # Studio divides these, so they must be numbers that add up
+        assert d["isWon"] <= d["isClosed"] and d["recovered"] + d["lost"] >= 0
+    assert all(m["orders"] >= m["disputes"] for m in demo["monthly"])
+
+
+def test_insights_assistant_is_off_unless_configured(monkeypatch):
+    from fastapi.testclient import TestClient
+
+    from rebuttal import web
+    monkeypatch.delenv("INSIGHTS_AI", raising=False)
+    r = TestClient(web.app).post("/api/ai/responses", json={"input": "hi"})
+    assert r.status_code == 503
+
+
+def test_ai_proxy_gives_earlier_output_items_ids():
+    from rebuttal.web import _give_ids
+    items = [{"type": "message", "role": "user", "content": []},
+             {"type": "message", "role": "assistant", "content": []},
+             {"type": "function_call", "call_id": "c1", "name": "x", "arguments": "{}"},
+             {"type": "function_call_output", "call_id": "c1", "output": "{}"},
+             {"type": "reasoning", "id": "rs_keep", "summary": []}]
+    _give_ids(items)
+    assert "id" not in items[0] and items[1]["id"].startswith("msg_") and items[2]["id"].startswith("fc_")
+    assert "id" not in items[3] and items[4]["id"] == "rs_keep"
+
+
+def test_ai_rate_limit_per_visitor_and_per_day():
+    from rebuttal.web import RateLimit
+    rl = RateLimit(per_visitor=2, per_day=3)
+    assert rl.allow("a") and rl.allow("a") and not rl.allow("a")
+    assert rl.allow("b") and not rl.allow("c")

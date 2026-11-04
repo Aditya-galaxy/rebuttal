@@ -248,3 +248,9 @@ textarea[readonly] { opacity: .8; }
 .grid-tools input { font: inherit; font-size: 14px; color: var(--ink); background: var(--card); border: 1px solid var(--line);
   border-radius: 10px; padding: 9px 12px; width: min(340px, 100%); }
 .grid-tools input:focus { outline: 2px solid var(--accent-soft); border-color: var(--accent); }
+
+/* Insights (AG Studio) */
+.studio { height: max(760px, calc(100vh - 260px)); border-radius: var(--radius); overflow: hidden; border: 1px solid var(--line); background: var(--paper); }
+.studio-pages { display: flex; gap: 6px; margin-bottom: 12px; flex-wrap: wrap; }
+.studio-pages button { font: inherit; font-size: 14px; font-weight: 600; color: var(--muted); background: transparent; border: 1px solid transparent; border-radius: 9px; padding: 7px 12px; cursor: pointer; }
+.studio-pages button.on, .studio-pages button:hover { color: var(--ink); background: var(--card); border-color: var(--line); }

@@ -1,0 +1,20 @@
+{% extends "base.html" %}
+{% block title %}Insights · Rebuttal{% endblock %}
+{% block main %}
+<section class="hero">
+  <div>
+    <h1>Insights</h1>
+    <p class="lede">Where disputes cost you money, whether following Rebuttal's advice paid off, and how your dispute rate is moving.
+      {% if config.aiEnabled %}Ask the assistant anything about your disputes, or have it build a chart.{% endif %}</p>
+  </div>
+  <button class="btn ghost" id="studio-edit" type="button" hidden>Edit report</button>
+</section>
+{% if generated %}
+<div class="banner info">Demo data: besides the four live cases, six months of Ember &amp; Clay's history here is generated to show what the report looks like over time. In sandbox mode Insights shows only real cases.</div>
+{% endif %}
+<nav class="studio-pages" id="studio-pages" aria-label="Report pages"></nav>
+<div id="studio" class="studio"><p class="busy"><span class="spin"></span> Loading the report…</p></div>
+<script type="application/json" id="insights-config">{{ config|tojson }}</script>
+<script src="{{ studio_js }}"></script>
+<script src="/static/insights.js?v=3"></script>
+{% endblock %}

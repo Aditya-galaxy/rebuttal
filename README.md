@@ -47,7 +47,12 @@ claims, and posting an item back to India costs more than many items are worth.
    - every fact cites a record that exists (`order:EC-2041`, `shipment:EC-2041`, `message:3` …);
    - notes fit PayPal's 2,000 characters, the offer amount is within the disputed amount, and the
      case is winnable.
-6. **Acts on approval.** One click sends it: `provide-evidence` (multipart, with PDFs), `make-offer`,
+6. **Shows where disputes cost money.** The **Insights** page is an [AG Studio](https://www.ag-grid.com/studio/)
+   report over every dispute: money disputed, kept and lost, win rate, the **dispute rate** (disputes ÷
+   orders, which PayPal watches), answers before the deadline, losses by reason, and whether following
+   Rebuttal's advice paid off. The seller can edit it or build new charts. In demo mode it includes six
+   months of generated history, labelled as such; in sandbox mode it shows only real cases.
+7. **Acts on approval.** One click sends it: `provide-evidence` (multipart, with PDFs), `make-offer`,
    `accept-claim`, `send-message`, or `provide-supporting-info` when PayPal is already reviewing a
    claim. An optional **autopilot** answers small disputes without a click, but only when every check
    passes and the plan matches the cost comparison.
@@ -160,6 +165,8 @@ rebuttal/
   engine.py         Sync, investigate, approve, send
   web.py            FastAPI app: disputes board, case review, settings, storefront, webhook
   static/board.js   The disputes board as an AG Grid, with live countdown cells
+  insights.py       The data behind Insights: every dispute's outcome, and orders and disputes by month
+frontend/           The Insights page script (AG Studio report and data model), built to static/insights.js
   persist.py        Keeps the SQLite files on a mounted folder across restarts
   cli.py            `rebuttal check`
 tests/test_core.py  24 tests: decisions, every gate rule, PayPal rules, the agent loop, webhooks
@@ -168,6 +175,20 @@ tests/test_core.py  24 tests: decisions, every gate rule, PayPal rules, the agen
 ```bash
 uv run pytest
 ```
+
+## Building the Insights page
+
+AG Studio loads from the CDN; only Rebuttal's page script is built, and the built file is committed.
+
+```bash
+cd frontend && npm install && npm run build   # writes ../rebuttal/static/insights.js
+```
+
+AG Studio is a commercial product. Without a licence key it runs fully unlocked with a trial watermark;
+set `AG_STUDIO_LICENSE_KEY` to remove it. AG Studio's built-in AI assistant is wired up through a proxy
+(`/api/ai/responses`), but it is off by default. Its sub-agents are built around OpenAI's models, and
+with the Nebius models we tried, its data agent stalled. Set `INSIGHTS_AI=1` and `INSIGHTS_LLM_API_KEY`
+(OpenAI) to turn it on.
 
 ## Running it as a container
 

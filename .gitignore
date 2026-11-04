@@ -8,3 +8,4 @@ data/
 PLAN.md
 .DS_Store
 submission/
+node_modules/

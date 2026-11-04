@@ -1,0 +1,16 @@
+{
+  "name": "rebuttal-insights",
+  "private": true,
+  "description": "The Insights page: AG Studio over Rebuttal's dispute history. Built into ../rebuttal/static/insights.js.",
+  "scripts": {
+    "build": "esbuild src/insights.ts --bundle --minify --format=iife --outfile=../rebuttal/static/insights.js --legal-comments=none --target=es2020",
+    "check": "tsc --noEmit -p ."
+  },
+  "dependencies": {
+    "ag-studio": "3.0.0"
+  },
+  "devDependencies": {
+    "esbuild": "0.25.9",
+    "typescript": "5.9.2"
+  }
+}
