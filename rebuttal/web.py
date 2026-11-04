@@ -18,7 +18,7 @@ from .engine import Engine
 from .fake_paypal import FakePayPal
 from .paypal import PayPalError
 from .plan import DOC_FILES
-from .playbook import REASON_LABELS, Settings, hours_left, parse_time, urgency
+from .playbook import REASON_LABELS, Settings, assess, hours_left, parse_time, urgency
 from .state import CLOSED, FAILED, INVESTIGATING, READY, SENT
 
 HERE = Path(__file__).parent
@@ -86,11 +86,19 @@ def _ctx(request: Request, **kw) -> dict:
 
 @app.get("/", response_class=HTMLResponse)
 def board(request: Request):
-    rows = sorted((_row(c) for c in eng().state.all()),
-                  key=lambda r: (r["status"] == CLOSED, r["status"] == SENT,
-                                 r["hours"] if r["hours"] is not None else 1e9))
-    return templates.TemplateResponse(request, "board.html", _ctx(request, rows=rows, s=_summary(rows),
-                                                         busy=any(r["status"] == INVESTIGATING for r in rows)))
+    e = eng()
+    settings = e.state.settings()
+    rows = []
+    for c in e.state.all():
+        r = _row(c)
+        r["strength"] = assess(c["dispute"], e.shop, settings).strength
+        rows.append(r)
+    rows.sort(key=lambda r: (r["status"] == CLOSED, r["status"] == SENT,
+                             r["hours"] if r["hours"] is not None else 1e9))
+    for i, r in enumerate(rows):
+        r["rank"] = i   # the grid's default order: open cases by deadline, then sent, then closed
+    return templates.TemplateResponse(request, "board.html", _ctx(
+        request, rows=rows, s=_summary(rows), busy=any(r["status"] == INVESTIGATING for r in rows)))
 
 
 @app.post("/demo/reset")

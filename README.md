@@ -26,7 +26,10 @@ claims, and posting an item back to India costs more than many items are worth.
 ## What it does
 
 1. **Watches.** It pulls disputes from the PayPal Disputes API (and PayPal dispute webhooks), and
-   gives every open case a live countdown to `seller_response_due_date`.
+   gives every open case a live countdown to `seller_response_due_date`. The disputes board is an
+   [AG Grid](https://www.ag-grid.com/) (Community edition): sort by time left, amount or evidence
+   strength, filter any column, search across buyers and items, with a pinned total of the money
+   in dispute. A seller with forty open cases sees the next one to answer at the top.
 2. **Investigates.** A tool-using AI agent reads the dispute, the order, the carrier's event
    history, the emails with the buyer, the listing and the shop's policies.
 3. **Decides with numbers, not vibes.** Code, not the model, rates the evidence (strong, medium or
@@ -156,6 +159,7 @@ rebuttal/
   gate.py           The checks before sending
   engine.py         Sync, investigate, approve, send
   web.py            FastAPI app: disputes board, case review, settings, storefront, webhook
+  static/board.js   The disputes board as an AG Grid, with live countdown cells
   persist.py        Keeps the SQLite files on a mounted folder across restarts
   cli.py            `rebuttal check`
 tests/test_core.py  24 tests: decisions, every gate rule, PayPal rules, the agent loop, webhooks
