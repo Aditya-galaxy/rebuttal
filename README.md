@@ -178,6 +178,17 @@ That run is also why Rebuttal handles claims already under review. Real dispute 
 | Shipment tracking (`/v1/shipping/trackers-batch`) | Uploading the carrier tracker |
 | Webhooks: `verify-webhook-signature`, `CUSTOMER.DISPUTE.*` | New disputes without polling |
 
+## Other tools and sponsor integrations
+
+| Tool | Used for |
+|---|---|
+| **AG Grid Community 32.3.3** (sponsor) | The disputes board: a live deadline countdown per row (custom cell renderer, default sort), sorting, column filters, quick search, a pinned total row, and responsive columns |
+| **AG Studio 3.0.0** (sponsor) | The Insights report: money disputed, kept and lost, monthly dispute rate, on-time answers, "by hand vs Rebuttal", and advice vs outcome. It's built from related tables with calculated measures. Its AI assistant is wired through a server-side proxy but is off in the hosted demo (see [Building the Insights page](#building-the-insights-page)) |
+| Google Cloud Vertex AI | Gemini models for the agent, the photo check and the demo images (see [How the AI is used](#how-the-ai-is-used)) |
+| Google Cloud Run + Cloud Storage | Hosting both services; the SQLite state is snapshotted to a Cloud Storage bucket |
+| FastAPI, Jinja, SQLite, fpdf2, uv | The web app, its data and the evidence PDFs |
+| esbuild | Bundling the Insights frontend |
+
 ## Code map
 
 ```
