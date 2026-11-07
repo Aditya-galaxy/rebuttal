@@ -110,7 +110,7 @@ LLM_PROVIDER=nebius LLM_API_KEY=... uv run uvicorn rebuttal.web:app --port 8777
 4. Log in to https://www.sandbox.paypal.com as that buyer and report a problem with the payment.
 5. Click **Check PayPal now**. Sandbox disputes take about 3 minutes to reach the API.
 
-### What we verified live in the sandbox (3 Nov 2026)
+### What we verified live in the sandbox (3–7 Nov 2026)
 
 - Order `EC-2071` was paid through PayPal Checkout (Orders v2 capture, transaction `1FK2168823766710E`),
   and its tracker was uploaded as `DELIVERED`.
@@ -124,7 +124,12 @@ LLM_PROVIDER=nebius LLM_API_KEY=... uv run uvicorn rebuttal.web:app --port 8777
   is refused with 400.
 
 - Order `EC-2073` shipped on the real clock (FedEx from Jaipur, about four days to a signed delivery);
-  PayPal's tracker moves from Shipped to Delivered when it arrives.
+  PayPal's tracker moved from Shipped to Delivered when it arrived on 7 Nov.
+- About 80 minutes later the buyer filed "not received" as **PP-R-ZBY-10196965**. It reached Rebuttal
+  by webhook, with no click. On the first run the gate blocked Gemini's draft for citing a record
+  that doesn't exist; after the fix (and a test), all nine checks passed. The seller approved, and
+  PayPal's record shows `proof-of-delivery.pdf` under `supporting_info`, `source: SUBMITTED_BY_SELLER`.
+  This is the case in the demo video.
 - On the hosted demo, Gemini 2.5 Flash on Vertex AI drafts all four demo cases with every check
   passing, and the photo check runs on the chai-cup case.
 
