@@ -61,7 +61,7 @@ def run(plan: dict, dispute: dict, shop, a: Assessment, settings: Settings) -> V
                             "PayPal asked for: " + (", ".join(sorted(requested)) or "nothing specific")
                             + (f". Missing: {', '.join(sorted(missing))}." if missing else ". All included.")))
         checks.append(Check("Has evidence", bool(plan.get("evidence")),
-                            f"{len(plan.get('evidence', []))} evidence items."))
+                            _count(len(plan.get('evidence', [])), "evidence item") + "."))
 
         ship = shop.shipment(a.order_id) if a.order_id else None
         bad = [e["tracking"]["tracking_number"] for e in plan.get("evidence", []) if e.get("tracking")
@@ -106,3 +106,7 @@ def run(plan: dict, dispute: dict, shop, a: Assessment, settings: Settings) -> V
 
     auto = settings.autopilot_limit > 0 and amount <= settings.autopilot_limit and action == a.recommended
     return Verdict(checks, auto)
+
+
+def _count(n: int, noun: str) -> str:
+    return f"{n} {noun}" + ("" if n == 1 else "s")

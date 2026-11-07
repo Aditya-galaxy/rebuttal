@@ -173,13 +173,15 @@ def execute(pp, plan: dict, files: dict[str, bytes]) -> list[str]:
         wanted = {d["name"] for e in evidences for d in e.get("documents", [])}
         parts = [(name, data, "application/pdf") for name, data in files.items() if name in wanted]
         pp.provide_evidence(did, evidences, parts)
-        log.append(f"Sent {len(evidences)} evidence items and {len(parts)} documents to PayPal.")
+        log.append(f"Sent {len(evidences)} evidence item{'' if len(evidences) == 1 else 's'} and "
+                   f"{len(parts)} document{'' if len(parts) == 1 else 's'} to PayPal.")
     elif action == "supporting_info":
         notes = supporting_notes(plan)
         wanted = {d["name"] for e in paypal_evidences(plan) for d in e.get("documents", [])}
         parts = [(name, data, "application/pdf") for name, data in files.items() if name in wanted]
         pp.provide_supporting_info(did, notes, parts)
-        log.append(f"Sent supporting information ({len(notes)} characters) and {len(parts)} documents to PayPal.")
+        log.append(f"Sent supporting information ({len(notes)} characters) and {len(parts)} "
+                   f"document{'' if len(parts) == 1 else 's'} to PayPal.")
     elif action in OFFER_TYPE:
         amount = plan.get("offer_amount")
         money = {"currency_code": "USD", "value": f"{amount:.2f}"} if amount is not None else None
