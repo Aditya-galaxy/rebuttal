@@ -509,3 +509,23 @@ def test_catalogue_refresh_fixes_old_saved_photos(tmp_path):
     seed_catalog(shop)                                                                 # and again: no duplicates
     assert shop.product("CHAI-RUST")["photos"] == ["chai-rust.jpg"]
     assert len(shop.photos(sku="CHAI-RUST", source="listing")) == 1
+
+
+def test_agent_drops_an_empty_email_thread_it_attached(world):
+    shop, _ = world
+    d, a = case(world, "PP-D-1001")
+    shop.db.execute("delete from messages where order_id = ?", (a.order_id,))
+    llm = ScriptedLLM([
+        ("get_assessment", {}),
+        ("submit_plan", {"action": "fight", "summary": "Delivered and signed.",
+                         "claims": [{"text": "DHL delivered it.", "cites": ["shipment:EC-2041"]}],
+                         "evidence": [{"evidence_type": "PROOF_OF_FULFILLMENT", "doc": "delivery",
+                                       "notes": "Signed for.", "cites": ["shipment:EC-2041"],
+                                       "tracking_number": "4589203716", "carrier": "DHL"},
+                                      {"evidence_type": "OTHER", "doc": "messages",
+                                       "notes": "The emails.", "cites": ["message:EC-2041"]}],
+                         "buyer_message": "Hi Jordan"}),
+    ])
+    p = investigate(d, shop, a, llm)
+    assert [e["doc"] for e in p["evidence"]] == ["delivery"]
+    assert gate.run(p, d, shop, a, Settings()).passed

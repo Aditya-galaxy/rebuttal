@@ -61,7 +61,8 @@ Rules:
 8. Documents you can attach: "delivery" (carrier proof of delivery), "messages" (the email thread),
    "listing" (listing text, photo and return policy), "receipt" (order receipt), "photos" (the listing
    photo beside the buyer's photo, with the photo check). Include every evidence
-   type PayPal requested from the seller.
+   type PayPal requested from the seller. Attach "messages" only if get_messages returned messages,
+   and cite each message by the id it returned (like "message:3"), never by the order number.
 """
 
 TOOLS = [
@@ -267,7 +268,10 @@ def _tools(dispute: dict, shop, a: Assessment) -> dict:
 def _to_plan(args: dict, dispute: dict, shop, a: Assessment, trace: list, model: str) -> dict:
     ship = shop.shipment(a.order_id) if a.order_id else None
     evidence = []
+    has_messages = bool(a.order_id and shop.messages(a.order_id))
     for ev in args.get("evidence") or []:
+        if ev.get("doc") == "messages" and not has_messages:
+            continue   # an empty email thread proves nothing, and its citations would be invented
         item = {"evidence_type": ev.get("evidence_type", "OTHER"), "doc": ev.get("doc"),
                 "notes": ev.get("notes", ""), "cites": ev.get("cites", [])}
         if ev.get("tracking_number"):
